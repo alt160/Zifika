@@ -39,7 +39,7 @@ bld/
 #wwwroot/
 
 # VSHistory folder
-.VSHistory/
+.vshistory/
 
 # Visual Studio 2017 auto generated files
 Generated\ Files/
