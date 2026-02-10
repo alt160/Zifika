@@ -75,6 +75,7 @@ namespace RedxLib
             }
         }
 
+
         /// <inheritdoc/>
         public override bool CanRead => !_disposed;
 
@@ -313,6 +314,17 @@ namespace RedxLib
             _position += bytes.Length;
             if (_position > _length)
                 _length = _position;
+        }
+
+        /// <summary>
+        /// Zeroes the active buffer contents in place for hygiene.<br/>
+        /// Leaves length and position unchanged so callers can still read if needed.<br/>
+        /// Intended for wiping temporary secrets held in the buffer.<br/>
+        /// </summary>
+        internal void ClearBuffer()
+        {
+            EnsureNotDisposed();
+            _buffer.Span.Slice(0, _length).Clear();
         }
     }
 }

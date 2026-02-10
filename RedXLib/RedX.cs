@@ -205,43 +205,70 @@ namespace RedxLib
         /// </summary>
         public static RedxBufferStream Decrypt(RedxBufferStream ciphertext, RedXKey key, bool requireIntegrity = true)
         {
-            // No plaintext bytes are released until all verification passes.
             if (ciphertext == null) throw new ArgumentNullException(nameof(ciphertext));
             if (key == null) throw new ArgumentNullException(nameof(key));
+            key.EnsureNotDisposed();
 
-            if (!TryReadStartLocation1Bit(key, ciphertext, default, out ushort startLocationU16)) return null;
-            var startLocation = unchecked((short)startLocationU16);
-            using var intCatLenPlain = key.UnmapData(ciphertext, 0, default, 1);
-            if (intCatLenPlain == null || intCatLenPlain.Length != 1) return null;
-            var intCatLen = intCatLenPlain.AsReadOnlySpan[0];
+            byte[] rowOffsetBytes = null;
+            byte[] integrityBytes = null;
+            RedxBufferStream intCat = null;
+            RedXKey workingKey = null;
 
-            var intCat = key.UnmapData(ciphertext, intCatLen, default, intCatLen);
-            if (intCat == null || intCat.Length != intCatLen) return null;
-
-            int remaining = (int)(ciphertext.Length - ciphertext.Position);
-            int integrityLen = requireIntegrity ? 32 : 0;
-            if (remaining < integrityLen) return null;
-            int rowOffsetLen = remaining - integrityLen;
-
-            var rowOffsetBytes = ciphertext.ReadBytes(rowOffsetLen);
-            byte[] integrityBytes = requireIntegrity ? ciphertext.ReadBytes(integrityLen) : Array.Empty<byte>();
-
-            if (requireIntegrity)
+            try
             {
-                if (integrityBytes.Length != 32) return null;
-                var b3 = Blake3.Hasher.New();
-                b3.Update(rowOffsetBytes);
-                b3.Update(intCat.AsReadOnlySpan);
-                Span<byte> integrity2 = stackalloc byte[32];
-                b3.Finalize(integrity2);
-                using var integrityPlain = key.UnmapData(new RedxBufferStream(integrityBytes), intCatLen, intCat.AsReadOnlySpan, 32);
-                if (integrityPlain == null || !integrityPlain.AsReadOnlySpan.SequenceEqual(integrity2))
-                    return null;
-            }
+                if (!TryReadStartLocation1Bit(key, ciphertext, default, out ushort startLocationU16)) return null;
+                var startLocation = unchecked((short)startLocationU16);
+                using var intCatLenPlain = key.UnmapData(ciphertext, 0, default, 1);
+                if (intCatLenPlain == null || intCatLenPlain.Length != 1) return null;
+                var intCatLen = intCatLenPlain.AsReadOnlySpan[0];
+                intCatLenPlain.ClearBuffer();
 
-            var plain = key.UnmapData(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan);
-            plain.Position = 0;
-            return plain;
+                intCat = key.UnmapData(ciphertext, startLocation, default, intCatLen);
+                if (intCat == null || intCat.Length != intCatLen) return null;
+
+                int remaining = (int)(ciphertext.Length - ciphertext.Position);
+                int integrityLen = requireIntegrity ? 32 : 0;
+                if (remaining < integrityLen) return null;
+                int rowOffsetLen = remaining - integrityLen;
+
+                rowOffsetBytes = ciphertext.ReadBytes(rowOffsetLen);
+                integrityBytes = requireIntegrity ? ciphertext.ReadBytes(integrityLen) : Array.Empty<byte>();
+
+                workingKey = RedXKey.RehydrateFromRawKeyBytes(key.key);
+                workingKey.ReshuffleInPlace(intCat.AsReadOnlySpan);
+
+                if (requireIntegrity)
+                {
+                    if (integrityBytes.Length != 32) return null;
+                    var b3 = Blake3.Hasher.New();
+                    b3.Update(rowOffsetBytes);
+                    b3.Update(intCat.AsReadOnlySpan);
+                    Span<byte> integrity2 = stackalloc byte[32];
+                    b3.Finalize(integrity2);
+                    using var integrityPlain = workingKey.UnmapData(new RedxBufferStream(integrityBytes), startLocation, intCat.AsReadOnlySpan, 32);
+                    if (integrityPlain == null || !integrityPlain.AsReadOnlySpan.SequenceEqual(integrity2))
+                        return null;
+                    integrityPlain.ClearBuffer();
+                }
+
+                var plain = workingKey.UnmapData(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan);
+                plain.Position = 0;
+                return plain;
+            }
+            finally
+            {
+                if (intCat != null)
+                {
+                    intCat.ClearBuffer();
+                    intCat.Dispose();
+                }
+                if (rowOffsetBytes != null)
+                    Array.Clear(rowOffsetBytes, 0, rowOffsetBytes.Length);
+                if (integrityBytes != null && integrityBytes.Length > 0)
+                    Array.Clear(integrityBytes, 0, integrityBytes.Length);
+                if (workingKey != null)
+                    workingKey.Dispose();
+            }
         }
         /// <summary>
         /// Overload for byte[] ciphertext convenience for symmetric decrypt.
@@ -260,47 +287,68 @@ namespace RedxLib
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (key == null) throw new ArgumentNullException(nameof(key));
+            key.EnsureNotDisposed();
 
             var ret = new RedxBufferStream();
+            byte[] startBuf = null;
+            byte[] intCat = null;
+            byte[] rowOffsetBytes = null;
+            RedXKey workingKey = null;
 
-            // 1) start location for payload walk (1-bit encoded)
-            ushort startLocation = (ushort)RandomNumberGenerator.GetInt32(0, Math.Min(key.key.Length, ushort.MaxValue + 1));
-            short startLocationShort = unchecked((short)startLocation);
-            var startBuf = startLocation.To1BitEncodedBytes(randomizeUnusedBits: true);
-            using (var startEnc = key.MapData(startBuf, 0))
-                ret.Write(startEnc);
-
-            // 2) interference catalyst header (len + encrypted catalyst)
-            var intCatLen = (byte)RandomNumberGenerator.GetInt32(7, 64);
-            var intCat = RandomNumberGenerator.GetBytes(intCatLen);
-            Span<byte> intCatLenBuf = stackalloc byte[1];
-            intCatLenBuf[0] = intCatLen;
-            using (var intCatLenEnc = key.MapData(intCatLenBuf, 0))
-                ret.Write(intCatLenEnc);
-            using (var intCatEnc = key.MapData(intCat, intCatLen))
-                ret.Write(intCatEnc);
-
-            // 3) key-row offset stream
-            byte[] rowOffsetBytes;
-            using (var cipher = key.MapData(data, startLocationShort, intCat))
-                rowOffsetBytes = cipher.AsReadOnlySpan.ToArray();
-            ret.Write(rowOffsetBytes);
-
-            // 4) optional integrity seal at end
-            if (useIntegrity)
+            try
             {
-                Span<byte> integritySeal = stackalloc byte[32];
-                var b3 = Blake3.Hasher.New();
-                // Seal binds only the emitted action stream and catalyst; header integrity is enforced structurally and by checkpoints.
-                b3.Update(rowOffsetBytes);
-                b3.Update(intCat);
-                b3.Finalize(integritySeal);
-                using var integrityEnc = key.MapData(integritySeal, intCatLen, intCat);
-                ret.Write(integrityEnc);
-            }
+                // 1) start location for payload walk (1-bit encoded)
+                ushort startLocation = (ushort)RandomNumberGenerator.GetInt32(0, Math.Min(key.key.Length, ushort.MaxValue + 1));
+                short startLocationShort = unchecked((short)startLocation);
+                startBuf = startLocation.To1BitEncodedBytes(randomizeUnusedBits: true);
+                using (var startEnc = key.MapData(startBuf, 0))
+                    ret.Write(startEnc);
 
-            ret.Position = 0;
-            return ret;
+                // 2) interference catalyst header (len + encrypted catalyst)
+                var intCatLen = (byte)RandomNumberGenerator.GetInt32(7, 64);
+                intCat = RandomNumberGenerator.GetBytes(intCatLen);
+                Span<byte> intCatLenBuf = stackalloc byte[1];
+                intCatLenBuf[0] = intCatLen;
+                using (var intCatLenEnc = key.MapData(intCatLenBuf, 0))
+                    ret.Write(intCatLenEnc);
+                using (var intCatEnc = key.MapData(intCat, startLocationShort))
+                    ret.Write(intCatEnc);
+
+                // 2b) reshuffle a working key clone using the interference catalyst
+                workingKey = RedXKey.RehydrateFromRawKeyBytes(key.key);
+                workingKey.ReshuffleInPlace(intCat);
+
+                // 3) key-row offset stream
+                using (var cipher = workingKey.MapData(data, startLocationShort, intCat))
+                    rowOffsetBytes = cipher.AsReadOnlySpan.ToArray();
+                ret.Write(rowOffsetBytes);
+
+                // 4) optional integrity seal at end
+                if (useIntegrity)
+                {
+                    Span<byte> integritySeal = stackalloc byte[32];
+                    var b3 = Blake3.Hasher.New();
+                    b3.Update(rowOffsetBytes);
+                    b3.Update(intCat);
+                    b3.Finalize(integritySeal);
+                    using var integrityEnc = workingKey.MapData(integritySeal, startLocationShort, intCat);
+                    ret.Write(integrityEnc);
+                }
+
+                ret.Position = 0;
+                return ret;
+            }
+            finally
+            {
+                if (rowOffsetBytes != null)
+                    Array.Clear(rowOffsetBytes, 0, rowOffsetBytes.Length);
+                if (intCat != null)
+                    Array.Clear(intCat, 0, intCat.Length);
+                if (startBuf != null)
+                    Array.Clear(startBuf, 0, startBuf.Length);
+                if (workingKey != null)
+                    workingKey.Dispose();
+            }
         }
         /// <summary>
         /// Mint (sign) using the minting key so ciphertext can be decrypted by a verifier key and verified via authority signatures.<br/>
@@ -314,177 +362,204 @@ namespace RedxLib
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (authorityPrivateKeyPkcs8.IsEmpty) throw new ArgumentException("authority private key is required", nameof(authorityPrivateKeyPkcs8));
+            key.EnsureNotDisposed();
 
             // output ciphertext buffer
             var ret = new RedxBufferStream();
+            byte[] vKeyLockBytes = null;
+            byte[] startBuf = null;
+            byte[] intCat = null;
+            byte[] cipherBytes = null;
+            byte[] sigs = null;
+            byte[] ckStates = null;
+            RedXKey payloadKey = null;
 
-            // 1) random start location (payload walk, 1-bit encoded)
-            ushort startLocation = (ushort)RandomNumberGenerator.GetInt32(0, Math.Min(key.key.Length, ushort.MaxValue + 1));
-            short startLocationShort = unchecked((short)startLocation);
-
-            // 2) per-message 4-byte lock to encrypt control stream
-            var vKeyLockBytes = RandomNumberGenerator.GetBytes(4);
-            ret.Write(vKeyLockBytes);
-
-            // 3) encrypted start location (pos-0 mapping; verifier-key-bound when available)
-            var startBuf = startLocation.To1BitEncodedBytes(randomizeUnusedBits: true);
-            if (vKeyTarget != null)
+            try
             {
-                using var startEnc = key.MapData(vKeyTarget, vKeyLockBytes, startBuf, 0);
-                ret.Write(startEnc);
-            }
-            else
-            {
-                using var startEnc = key.MapData(startBuf, 0, vKeyLockBytes);
-                ret.Write(startEnc);
-            }
+                // 1) random start location (payload walk, 1-bit encoded)
+                ushort startLocation = (ushort)RandomNumberGenerator.GetInt32(0, Math.Min(key.key.Length, ushort.MaxValue + 1));
+                short startLocationShort = unchecked((short)startLocation);
 
-            // 4) interference catalyst (payload)
-            var intCatLen = (byte)RandomNumberGenerator.GetInt32(7, 64);
-            var intCat = RandomNumberGenerator.GetBytes(intCatLen);
+                // 2) per-message 4-byte lock to encrypt control stream
+                vKeyLockBytes = RandomNumberGenerator.GetBytes(4);
+                ret.Write(vKeyLockBytes);
 
-            // Strategy: for small/medium payloads use a single accumulator signature; for larger payloads use checkpoints up to maxCheckpoints.
-            const int SingleSigThreshold = 4 * 1024; // switch to checkpoints above this
-            bool useCheckpoints = data.Length > SingleSigThreshold;
-
-            int ckCount, interval;
-            byte[] sigs;
-            ReadOnlySpan<byte> rKeyId32 = key.keyHash.Span.Slice(0, 32);
-            byte[] cipherBytes;
-            byte[] intCatArr = intCat;
-
-            if (useCheckpoints)
-            {
-                // checkpoint path
-                ComputeCheckpointPlan(data.Length, maxCheckpoints, out ckCount, out interval);
-                byte[] ckStates = ckCount > 0 ? new byte[ckCount * ObserverStateSize] : Array.Empty<byte>();
-                using (var cipher = key.MapDataWithObserver(data, startLocationShort, intCatArr, interval, ckCount, ckStates))
+                // 3) encrypted start location (pos-0 mapping; verifier-key-bound when available)
+                startBuf = startLocation.To1BitEncodedBytes(randomizeUnusedBits: true);
+                if (vKeyTarget != null)
                 {
-                    cipherBytes = cipher.AsReadOnlySpan.ToArray();
+                    using var startEnc = key.MapData(vKeyTarget, vKeyLockBytes, startBuf, 0);
+                    ret.Write(startEnc);
+                }
+                else
+                {
+                    using var startEnc = key.MapData(startBuf, 0, vKeyLockBytes);
+                    ret.Write(startEnc);
                 }
 
-                sigs = ckCount > 0 ? new byte[ckCount * DefaultAuthoritySigSize] : Array.Empty<byte>();
-                using (var ecdsa = ECDsa.Create())
+                // 4) interference catalyst (payload)
+                var intCatLen = (byte)RandomNumberGenerator.GetInt32(7, 64);
+                intCat = RandomNumberGenerator.GetBytes(intCatLen);
+                payloadKey = RedXKey.RehydrateFromRawKeyBytes(key.key);
+                payloadKey.ReshuffleInPlace(intCat);
+
+                // Strategy: for small/medium payloads use a single accumulator signature; for larger payloads use checkpoints up to maxCheckpoints.
+                const int SingleSigThreshold = 4 * 1024; // switch to checkpoints above this
+                bool useCheckpoints = data.Length > SingleSigThreshold;
+
+                int ckCount, interval;
+                ReadOnlySpan<byte> rKeyId32 = key.keyHash.Span.Slice(0, 32);
+                byte[] intCatArr = intCat;
+
+                if (useCheckpoints)
                 {
-                    ecdsa.ImportPkcs8PrivateKey(authorityPrivateKeyPkcs8, out _);
-
-                    Span<byte> msg = stackalloc byte[AuthorityDomainBytes.Length + 32 + 4 + ObserverStateSize];
-
-                    for (int i = 0; i < ckCount; i++)
+                    // checkpoint path
+                    ComputeCheckpointPlan(data.Length, maxCheckpoints, out ckCount, out interval);
+                    ckStates = ckCount > 0 ? new byte[ckCount * ObserverStateSize] : Array.Empty<byte>();
+                    using (var cipher = payloadKey.MapDataWithObserver(data, startLocationShort, intCatArr, interval, ckCount, ckStates))
                     {
-                        var st = ckStates.AsSpan(i * ObserverStateSize, ObserverStateSize);
-                        int msgLen = BuildAuthorityMessage(rKeyId32, i, st, msg);
+                        cipherBytes = cipher.AsReadOnlySpan.ToArray();
+                    }
 
-                        var sigDest = sigs.AsSpan(i * DefaultAuthoritySigSize, DefaultAuthoritySigSize);
+                    sigs = ckCount > 0 ? new byte[ckCount * DefaultAuthoritySigSize] : Array.Empty<byte>();
+                    using (var ecdsa = ECDsa.Create())
+                    {
+                        ecdsa.ImportPkcs8PrivateKey(authorityPrivateKeyPkcs8, out _);
+
+                        Span<byte> msg = stackalloc byte[AuthorityDomainBytes.Length + 32 + 4 + ObserverStateSize];
+
+                        for (int i = 0; i < ckCount; i++)
+                        {
+                            var st = ckStates.AsSpan(i * ObserverStateSize, ObserverStateSize);
+                            int msgLen = BuildAuthorityMessage(rKeyId32, i, st, msg);
+
+                            var sigDest = sigs.AsSpan(i * DefaultAuthoritySigSize, DefaultAuthoritySigSize);
+                            if (!ecdsa.TrySignData(msg.Slice(0, msgLen), sigDest, HashAlgorithmName.SHA256,
+                                    DSASignatureFormat.IeeeP1363FixedFieldConcatenation, out int written) || written != DefaultAuthoritySigSize)
+                                throw new CryptographicException("authority signing failed");
+                        }
+                    }
+                    DebugMint($"Mint checkpoints: ckCount={ckCount} interval={interval} cipherLen={cipherBytes.Length} useIntegrity={useIntegrity}");
+                }
+                else
+                {
+                    // single-accumulator path
+                    ckCount = 1;
+                    interval = data.Length; // force one snapshot at end
+
+                    ckStates = new byte[ObserverStateSize];
+                    using (var cipher = payloadKey.MapDataWithObserver(data, startLocationShort, intCatArr, interval, ckCount, ckStates))
+                    {
+                        cipherBytes = cipher.AsReadOnlySpan.ToArray();
+                    }
+
+                    sigs = new byte[DefaultAuthoritySigSize];
+                    using (var ecdsa = ECDsa.Create())
+                    {
+                        ecdsa.ImportPkcs8PrivateKey(authorityPrivateKeyPkcs8, out _);
+                        Span<byte> msg = stackalloc byte[AuthorityDomainBytes.Length + 32 + 4 + ObserverStateSize];
+                        int msgLen = BuildAuthorityMessage(rKeyId32, 0, ckStates, msg);
+                        var sigDest = sigs.AsSpan();
                         if (!ecdsa.TrySignData(msg.Slice(0, msgLen), sigDest, HashAlgorithmName.SHA256,
                                 DSASignatureFormat.IeeeP1363FixedFieldConcatenation, out int written) || written != DefaultAuthoritySigSize)
                             throw new CryptographicException("authority signing failed");
                     }
-                }
-                DebugMint($"Mint checkpoints: ckCount={ckCount} interval={interval} cipherLen={cipherBytes.Length} useIntegrity={useIntegrity}");
-            }
-            else
-            {
-                // single-accumulator path
-                ckCount = 1;
-                interval = data.Length; // force one snapshot at end
-
-                byte[] ckStates = new byte[ObserverStateSize];
-                using (var cipher = key.MapDataWithObserver(data, startLocationShort, intCatArr, interval, ckCount, ckStates))
-                {
-                    cipherBytes = cipher.AsReadOnlySpan.ToArray();
+                    DebugMint($"Mint single-accumulator: ckCount=1 interval={interval} cipherLen={cipherBytes.Length} useIntegrity={useIntegrity}");
                 }
 
-                sigs = new byte[DefaultAuthoritySigSize];
-                using (var ecdsa = ECDsa.Create())
-                {
-                    ecdsa.ImportPkcs8PrivateKey(authorityPrivateKeyPkcs8, out _);
-                    Span<byte> msg = stackalloc byte[AuthorityDomainBytes.Length + 32 + 4 + ObserverStateSize];
-                    int msgLen = BuildAuthorityMessage(rKeyId32, 0, ckStates, msg);
-                    var sigDest = sigs.AsSpan();
-                    if (!ecdsa.TrySignData(msg.Slice(0, msgLen), sigDest, HashAlgorithmName.SHA256,
-                            DSASignatureFormat.IeeeP1363FixedFieldConcatenation, out int written) || written != DefaultAuthoritySigSize)
-                        throw new CryptographicException("authority signing failed");
-                }
-                DebugMint($"Mint single-accumulator: ckCount=1 interval={interval} cipherLen={cipherBytes.Length} useIntegrity={useIntegrity}");
-            }
+                // write encrypted checkpoint count and signatures (control stream encrypted under vKeyLockBytes at startLocation=0)
+                // count is 4 bytes little-endian
+                Span<byte> cntBuf = stackalloc byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(cntBuf, ckCount);
 
-            // write encrypted checkpoint count and signatures (control stream encrypted under vKeyLockBytes at startLocation=0)
-            // count is 4 bytes little-endian
-            Span<byte> cntBuf = stackalloc byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(cntBuf, ckCount);
-
-            if (vKeyTarget != null)
-            {
-                using var cntEnc = key.MapData(vKeyTarget, vKeyLockBytes, cntBuf, 0);
-                ret.Write(cntEnc);
-            }
-            else
-            {
-                using var cntEnc = key.MapData(cntBuf, 0, vKeyLockBytes);
-                ret.Write(cntEnc);
-            }
-
-            for (int i = 0; i < ckCount; i++)
-            {
-                var sig = sigs.AsSpan(i * DefaultAuthoritySigSize, DefaultAuthoritySigSize);
                 if (vKeyTarget != null)
                 {
-                    using var sigEnc = key.MapData(vKeyTarget, vKeyLockBytes, sig, 0);
-                    ret.Write(sigEnc);
+                    using var cntEnc = key.MapData(vKeyTarget, vKeyLockBytes, cntBuf, 0);
+                    ret.Write(cntEnc);
                 }
                 else
                 {
-                    using var sigEnc = key.MapData(sig, 0, vKeyLockBytes);
-                    ret.Write(sigEnc);
+                    using var cntEnc = key.MapData(cntBuf, 0, vKeyLockBytes);
+                    ret.Write(cntEnc);
                 }
-            }
 
-            // write interference catalyst length + catalyst (encrypted using header mapping)
-            Span<byte> intCatLenBuf = stackalloc byte[1];
-            intCatLenBuf[0] = intCatLen;
-            if (vKeyTarget != null)
-            {
-                using var lenEnc = key.MapData(vKeyTarget, vKeyLockBytes, intCatLenBuf, 0);
-                ret.Write(lenEnc);
-                // Map the interference catalyst header without catalyst-mixing so verifying-key-side decrypt mirrors the symmetric path.
-                using var headerEnc = key.MapData(vKeyTarget, vKeyLockBytes, intCat, intCatLen);
-                ret.Write(headerEnc);
-            }
-            else
-            {
-                using var lenEnc = key.MapData(intCatLenBuf, 0, vKeyLockBytes);
-                ret.Write(lenEnc);
-                using var headerEnc = key.MapData(intCat, intCatLen);
-                ret.Write(headerEnc);
-            }
+                for (int i = 0; i < ckCount; i++)
+                {
+                    var sig = sigs.AsSpan(i * DefaultAuthoritySigSize, DefaultAuthoritySigSize);
+                    if (vKeyTarget != null)
+                    {
+                        using var sigEnc = key.MapData(vKeyTarget, vKeyLockBytes, sig, 0);
+                        ret.Write(sigEnc);
+                    }
+                    else
+                    {
+                        using var sigEnc = key.MapData(sig, 0, vKeyLockBytes);
+                        ret.Write(sigEnc);
+                    }
+                }
 
-            // append ciphertext key-row offset stream
-            ret.Write(cipherBytes);
-
-            // optional integrity seal at end
-            if (useIntegrity)
-            {
-                var b3 = Blake3.Hasher.New();
-                // Seal binds only the emitted action stream and catalyst; header integrity is enforced structurally and by checkpoints.
-                b3.Update(cipherBytes);
-                b3.Update(intCat);
-                Span<byte> integritySeal = stackalloc byte[32];
-                b3.Finalize(integritySeal);
+                // write interference catalyst length + catalyst (encrypted using header mapping)
+                Span<byte> intCatLenBuf = stackalloc byte[1];
+                intCatLenBuf[0] = intCatLen;
                 if (vKeyTarget != null)
                 {
-                    using var integrityEnc = key.MapData(vKeyTarget, vKeyLockBytes, integritySeal, intCatLen, intCat);
-                    ret.Write(integrityEnc);
+                    using var lenEnc = key.MapData(vKeyTarget, vKeyLockBytes, intCatLenBuf, 0);
+                    ret.Write(lenEnc);
+                    // Map the interference catalyst header without catalyst-mixing so verifying-key-side decrypt mirrors the symmetric path.
+                    using var headerEnc = key.MapData(vKeyTarget, vKeyLockBytes, intCat, startLocationShort);
+                    ret.Write(headerEnc);
                 }
                 else
                 {
-                    using var integrityEnc = key.MapData(integritySeal, intCatLen, intCat);
-                    ret.Write(integrityEnc);
+                    using var lenEnc = key.MapData(intCatLenBuf, 0, vKeyLockBytes);
+                    ret.Write(lenEnc);
+                    using var headerEnc = key.MapData(intCat, startLocationShort);
+                    ret.Write(headerEnc);
                 }
-            }
 
-            ret.Position = 0;
-            return ret;
+                // append ciphertext key-row offset stream
+                ret.Write(cipherBytes);
+
+                // optional integrity seal at end
+                if (useIntegrity)
+                {
+                    var b3 = Blake3.Hasher.New();
+                    b3.Update(cipherBytes);
+                    b3.Update(intCat);
+                    Span<byte> integritySeal = stackalloc byte[32];
+                    b3.Finalize(integritySeal);
+                    if (vKeyTarget != null)
+                    {
+                        using var integrityEnc = payloadKey.MapData(vKeyTarget, vKeyLockBytes, integritySeal, startLocationShort, intCat);
+                        ret.Write(integrityEnc);
+                    }
+                    else
+                    {
+                        using var integrityEnc = payloadKey.MapData(integritySeal, startLocationShort, intCat);
+                        ret.Write(integrityEnc);
+                    }
+                }
+
+                ret.Position = 0;
+                return ret;
+            }
+            finally
+            {
+                if (ckStates != null && ckStates.Length > 0)
+                    Array.Clear(ckStates, 0, ckStates.Length);
+                if (sigs != null && sigs.Length > 0)
+                    Array.Clear(sigs, 0, sigs.Length);
+                if (cipherBytes != null && cipherBytes.Length > 0)
+                    Array.Clear(cipherBytes, 0, cipherBytes.Length);
+                if (intCat != null && intCat.Length > 0)
+                    Array.Clear(intCat, 0, intCat.Length);
+                if (startBuf != null && startBuf.Length > 0)
+                    Array.Clear(startBuf, 0, startBuf.Length);
+                if (vKeyLockBytes != null && vKeyLockBytes.Length > 0)
+                    Array.Clear(vKeyLockBytes, 0, vKeyLockBytes.Length);
+                if (payloadKey != null)
+                    payloadKey.Dispose();
+            }
         }
         /// <summary>
         /// Mint (sign + produce ciphertext) using a full key and optional verifier-targeted header.
@@ -534,8 +609,8 @@ namespace RedxLib
 
                 for (; idx < MaxBytes; idx++)
                 {
-                    int skipVal = ciphertext.ReadByte();
-                    if (skipVal < 0) return false;
+                    int cipherVal = ciphertext.ReadByte();
+                    if (cipherVal < 0) return false;
 
                     ushort jump = bx.NextJump16();
 
@@ -545,13 +620,15 @@ namespace RedxLib
                     curRow = (curRow + rowJump) % keyBlockSize;
                     curCol = (curCol + colJump) % 256;
 
-                    byte plain = key.key[curRow * 256 + (curCol + skipVal) % 256];
+                    int dist = key.rkd[curRow][(byte)cipherVal];
+                    int newCol = (curCol + dist) % 256;
+                    byte plain = key.key[curRow * 256 + newCol];
                     if (intCatLen > 0)
                         plain = (byte)((256 + plain - idx - intCat[idx % intCatLen]) % 256);
 
                     buf[idx] = plain;
 
-                    curCol = (curCol + skipVal) % 256;
+                    curCol = newCol;
                     curRow = (curRow + 1) % keyBlockSize;
 
                     if ((plain & 0x80) == 0)
@@ -640,117 +717,156 @@ namespace RedxLib
             if (verifyingKey == null) throw new ArgumentNullException(nameof(verifyingKey));
             if (authorityPublicKeySpki.IsEmpty) throw new ArgumentException("authority public key is required", nameof(authorityPublicKeySpki));
 
-            var verifyingKeyLock = ciphertext.ReadBytes(4);
-            if (verifyingKeyLock.Length != 4) return null;
-
-            if (!TryReadStartLocation1BitVKeyCompact(verifyingKey, ciphertext, verifyingKeyLock, out ushort startLocationU16))
-            {
-                DebugMint("VerifyAndDecrypt(vKey) startLocation decode failed");
-                return null;
-            }
-            var startLocation = unchecked((short)startLocationU16);
-
-            // read encrypted checkpoint count
             try
             {
-                var cntPlain = verifyingKey.UnmapData(ciphertext, 0, verifyingKeyLock, default, 4);
-                if (cntPlain == null || cntPlain.Length != 4)
-                {
-                    DebugMint("VerifyAndDecrypt(vKey) cntPlain null/len!=4");
-                    return null;
-                }
-                int ckCount = BinaryPrimitives.ReadInt32LittleEndian(cntPlain.AsReadOnlySpan);
-                if (ckCount < 0 || ckCount > maxCheckpoints)
-                {
-                    DebugMint($"VerifyAndDecrypt(vKey) ckCount out of range: {ckCount}");
-                    return null;
-                }
+                byte[] verifyingKeyLock = null;
+                byte[] keyBytes = null;
+                byte[] rkdFlat = null;
+                byte[] sigs = null;
+                byte[] rowOffsetBytes = null;
+                byte[] integrityEnc = null;
+                RedxBufferStream intCat = null;
 
-                // read encrypted signatures
-                byte[] sigs = ckCount > 0 ? new byte[ckCount * DefaultAuthoritySigSize] : Array.Empty<byte>();
-                for (int i = 0; i < ckCount; i++)
+                try
                 {
-                    var sigPlain = verifyingKey.UnmapData(ciphertext, 0, verifyingKeyLock, default, DefaultAuthoritySigSize);
-                    if (sigPlain == null || sigPlain.Length != DefaultAuthoritySigSize)
+                    verifyingKeyLock = ciphertext.ReadBytes(4);
+                    if (verifyingKeyLock.Length != 4) return null;
+
+                    if (!TryReadStartLocation1BitVKeyCompact(verifyingKey, ciphertext, verifyingKeyLock, out ushort startLocationU16))
                     {
-                        DebugMint($"VerifyAndDecrypt(vKey) sig[{i}] null/len!=64");
+                        DebugMint("VerifyAndDecrypt(vKey) startLocation decode failed");
                         return null;
                     }
-                    sigPlain.AsReadOnlySpan.CopyTo(sigs.AsSpan(i * DefaultAuthoritySigSize, DefaultAuthoritySigSize));
-                }
+                    var startLocation = unchecked((short)startLocationU16);
 
-                // intCat header (reject compact)
-                using var intCatLenPlain = verifyingKey.UnmapData(ciphertext, 0, verifyingKeyLock, default, 1);
-                if (intCatLenPlain == null || intCatLenPlain.Length != 1) return null;
-                var intCatLen = intCatLenPlain.AsReadOnlySpan[0];
-                var intCat = verifyingKey.UnmapData(ciphertext, (short)intCatLen, verifyingKeyLock, default, intCatLen, rejectCompactHeader: false);
-                if (intCat == null || intCat.Length != intCatLen)
-                    throw new InvalidDataException("Interference catalyst header decode failed (verifier path).");
-
-                int remaining = (int)(ciphertext.Length - ciphertext.Position);
-                // Integrity seal is verifier-key mapped; compact encoding adds a 1-byte marker.
-                int integrityEncodedLen = requireIntegrity ? 33 : 0; // MapData(vKey, ...) uses compact path for 32-byte integrity seal
-                if (remaining < integrityEncodedLen) return null;
-                int cipherLen = remaining - integrityEncodedLen;
-                var rowOffsetBytes = ciphertext.ReadBytes(cipherLen);
-                byte[] integrityEnc = requireIntegrity ? ciphertext.ReadBytes(integrityEncodedLen) : Array.Empty<byte>();
-
-                if (requireIntegrity)
-                {
-                    if (integrityEnc.Length != integrityEncodedLen)
+                    // read encrypted checkpoint count
+                    verifyingKey.BuildBaseKeyBytesAndRkd(out keyBytes, out rkdFlat);
+                    using var cntPlain = verifyingKey.UnmapDataWithRkd(ciphertext, 0, verifyingKeyLock, default, 4, false, rkdFlat);
+                    if (cntPlain == null || cntPlain.Length != 4)
                     {
-                        DebugMint($"VerifyAndDecrypt(vKey) integrityEnc length mismatch (got {integrityEnc.Length}, want {integrityEncodedLen})");
+                        DebugMint("VerifyAndDecrypt(vKey) cntPlain null/len!=4");
                         return null;
                     }
-                    using var integrityPlain = verifyingKey.UnmapData(new RedxBufferStream(integrityEnc), (short)intCatLen, verifyingKeyLock, intCat.AsReadOnlySpan, 32, rejectCompactHeader: false);
-                    if (integrityPlain == null || integrityPlain.Length != 32)
+                    int ckCount = BinaryPrimitives.ReadInt32LittleEndian(cntPlain.AsReadOnlySpan);
+                    cntPlain.ClearBuffer();
+                    if (ckCount < 0 || ckCount > maxCheckpoints)
                     {
-                        DebugMint("VerifyAndDecrypt(vKey) integrityPlain null/len!=32");
+                        DebugMint($"VerifyAndDecrypt(vKey) ckCount out of range: {ckCount}");
                         return null;
                     }
-                    var b3 = Blake3.Hasher.New();
-                    b3.Update(rowOffsetBytes);
-                    b3.Update(intCat.AsReadOnlySpan);
-                    Span<byte> integrity2 = stackalloc byte[32];
-                    b3.Finalize(integrity2);
-                    if (!integrityPlain.AsReadOnlySpan.SequenceEqual(integrity2))
+
+                    // read encrypted signatures
+                    sigs = ckCount > 0 ? new byte[ckCount * DefaultAuthoritySigSize] : Array.Empty<byte>();
+                    for (int i = 0; i < ckCount; i++)
                     {
-                        DebugMint("VerifyAndDecrypt(vKey) integrity seal mismatch");
+                        using var sigPlain = verifyingKey.UnmapDataWithRkd(ciphertext, 0, verifyingKeyLock, default, DefaultAuthoritySigSize, false, rkdFlat);
+                        if (sigPlain == null || sigPlain.Length != DefaultAuthoritySigSize)
+                        {
+                            DebugMint($"VerifyAndDecrypt(vKey) sig[{i}] null/len!=64");
+                            return null;
+                        }
+                        sigPlain.AsReadOnlySpan.CopyTo(sigs.AsSpan(i * DefaultAuthoritySigSize, DefaultAuthoritySigSize));
+                        sigPlain.ClearBuffer();
+                    }
+
+                    // intCat header (reject compact)
+                    using var intCatLenPlain = verifyingKey.UnmapDataWithRkd(ciphertext, 0, verifyingKeyLock, default, 1, false, rkdFlat);
+                    if (intCatLenPlain == null || intCatLenPlain.Length != 1) return null;
+                    var intCatLen = intCatLenPlain.AsReadOnlySpan[0];
+                    intCatLenPlain.ClearBuffer();
+                    intCat = verifyingKey.UnmapDataWithRkd(ciphertext, startLocation, verifyingKeyLock, default, intCatLen, false, rkdFlat);
+                    if (intCat == null || intCat.Length != intCatLen)
+                        throw new InvalidDataException("Interference catalyst header decode failed (verifier path).");
+
+                    RedXVerifyingDecryptionKey.ReshuffleKeyBytesAndRkdInPlace(keyBytes, rkdFlat, intCat.AsReadOnlySpan);
+
+                    int remaining = (int)(ciphertext.Length - ciphertext.Position);
+                    // Integrity seal is verifier-key mapped; compact encoding adds a 1-byte marker.
+                    int integrityEncodedLen = requireIntegrity ? 33 : 0; // MapData(vKey, ...) uses compact path for 32-byte integrity seal
+                    if (remaining < integrityEncodedLen) return null;
+                    int cipherLen = remaining - integrityEncodedLen;
+                    rowOffsetBytes = ciphertext.ReadBytes(cipherLen);
+                    integrityEnc = requireIntegrity ? ciphertext.ReadBytes(integrityEncodedLen) : Array.Empty<byte>();
+
+                    if (requireIntegrity)
+                    {
+                        if (integrityEnc.Length != integrityEncodedLen)
+                        {
+                            DebugMint($"VerifyAndDecrypt(vKey) integrityEnc length mismatch (got {integrityEnc.Length}, want {integrityEncodedLen})");
+                            return null;
+                        }
+                        using var integrityPlain = verifyingKey.UnmapDataWithRkd(new RedxBufferStream(integrityEnc), startLocation, verifyingKeyLock, intCat.AsReadOnlySpan, 32, false, rkdFlat);
+                        if (integrityPlain == null || integrityPlain.Length != 32)
+                        {
+                            DebugMint("VerifyAndDecrypt(vKey) integrityPlain null/len!=32");
+                            return null;
+                        }
+                        var b3 = Blake3.Hasher.New();
+                        b3.Update(rowOffsetBytes);
+                        b3.Update(intCat.AsReadOnlySpan);
+                        Span<byte> integrity2 = stackalloc byte[32];
+                        b3.Finalize(integrity2);
+                        if (!integrityPlain.AsReadOnlySpan.SequenceEqual(integrity2))
+                        {
+                            DebugMint("VerifyAndDecrypt(vKey) integrity seal mismatch");
+                            return null;
+                        }
+                        integrityPlain.ClearBuffer();
+                    }
+
+                    // derive checkpoint plan based on jump length
+                    ComputeCheckpointPlan(cipherLen, maxCheckpoints, out int planCount, out int interval);
+                    if (ckCount == 1 && planCount != 1)
+                    {
+                        // Encryption used single-accumulator path; force interval to full length
+                        interval = cipherLen;
+                    }
+                    else if (planCount != ckCount)
+                    {
+                        DebugMint($"VerifyAndDecrypt(vKey) plan mismatch planCount={planCount} ckCount={ckCount}");
                         return null;
                     }
-                }
+                    DebugMint($"VerifyAndDecrypt(vKey) start={startLocationU16} ckCount={ckCount} interval={interval} cipherLen={cipherLen} intCatLen={intCatLen} requireIntegrity={requireIntegrity}");
 
-                // derive checkpoint plan based on jump length
-                ComputeCheckpointPlan(cipherLen, maxCheckpoints, out int planCount, out int interval);
-                if (ckCount == 1 && planCount != 1)
+                    ReadOnlySpan<byte> rKeyId32 = verifyingKey.keyHash.Span.Slice(0, 32);
+
+                    // Pass 1: verify only (discard plaintext)
+                    using (var ecdsa = ECDsa.Create())
+                    {
+                        ecdsa.ImportSubjectPublicKeyInfo(authorityPublicKeySpki, out _);
+                        using var verifyOnly = verifyingKey.UnmapDataWithAuthorityWithRkd(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa, rKeyId32, keyBytes, rkdFlat, count: cipherLen);
+                        if (verifyOnly == null)
+                            return null;
+                        verifyOnly.ClearBuffer();
+                    }
+
+                    using var ecdsa2 = ECDsa.Create();
+                    ecdsa2.ImportSubjectPublicKeyInfo(authorityPublicKeySpki, out _);
+                    var plain = verifyingKey.UnmapDataWithAuthorityWithRkd(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa2, rKeyId32, keyBytes, rkdFlat, count: cipherLen);
+                    if (plain == null) return null;
+                    plain.Position = 0;
+                    return plain;
+                }
+                finally
                 {
-                    // Encryption used single-accumulator path; force interval to full length
-                    interval = cipherLen;
+                    if (intCat != null)
+                    {
+                        intCat.ClearBuffer();
+                        intCat.Dispose();
+                    }
+                    if (sigs != null && sigs.Length > 0)
+                        Array.Clear(sigs, 0, sigs.Length);
+                    if (rowOffsetBytes != null && rowOffsetBytes.Length > 0)
+                        Array.Clear(rowOffsetBytes, 0, rowOffsetBytes.Length);
+                    if (integrityEnc != null && integrityEnc.Length > 0)
+                        Array.Clear(integrityEnc, 0, integrityEnc.Length);
+                    if (verifyingKeyLock != null && verifyingKeyLock.Length > 0)
+                        Array.Clear(verifyingKeyLock, 0, verifyingKeyLock.Length);
+                    if (keyBytes != null)
+                        Array.Clear(keyBytes, 0, keyBytes.Length);
+                    if (rkdFlat != null)
+                        Array.Clear(rkdFlat, 0, rkdFlat.Length);
                 }
-                else if (planCount != ckCount)
-                {
-                    DebugMint($"VerifyAndDecrypt(vKey) plan mismatch planCount={planCount} ckCount={ckCount}");
-                    return null;
-                }
-                DebugMint($"VerifyAndDecrypt(vKey) start={startLocationU16} ckCount={ckCount} interval={interval} cipherLen={cipherLen} intCatLen={intCatLen} requireIntegrity={requireIntegrity}");
-
-                ReadOnlySpan<byte> rKeyId32 = verifyingKey.keyHash.Span.Slice(0, 32);
-
-                // Pass 1: verify only (discard plaintext)
-                using (var ecdsa = ECDsa.Create())
-                {
-                    ecdsa.ImportSubjectPublicKeyInfo(authorityPublicKeySpki, out _);
-                    var verifyOnly = verifyingKey.UnmapDataWithAuthority(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa, rKeyId32, count: cipherLen);
-                    if (verifyOnly == null)
-                        return null;
-                }
-
-                using var ecdsa2 = ECDsa.Create();
-                ecdsa2.ImportSubjectPublicKeyInfo(authorityPublicKeySpki, out _);
-                var plain = verifyingKey.UnmapDataWithAuthority(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa2, rKeyId32, count: cipherLen);
-                if (plain == null) return null;
-                plain.Position = 0;
-                return plain;
             }
             catch
             {
@@ -793,7 +909,7 @@ namespace RedxLib
     /// Holds the permutation rows, inverse lookup tables, and Blake3 key hash that seeds jump generators.<br/>
     /// Consumers encrypt with this type; verifier keys derived from it can decrypt without exposing the forward permutation.
     /// </summary>
-    public class RedXKey
+    public class RedXKey : IDisposable
     {
         /// <summary>
         /// Rehydrate a key from the serialized blob produced by ToBytes().<br/>
@@ -967,6 +1083,7 @@ namespace RedxLib
         internal const int MinSeedLength = 16;
         private const byte KeyBlobVersion = 1;
         private static readonly byte[] KeySeedDomainBytes = "REDX_KEY_SEED_V1"u8.ToArray();
+        internal static readonly byte[] ReshuffleDomainBytes = "REDX_RESHUFFLE_V1"u8.ToArray();
 
 
 
@@ -980,6 +1097,7 @@ namespace RedxLib
         internal Memory<byte> keyHash;
         internal int keyLength;
         internal byte[][] rkd;
+        private bool _disposed;
 
 
 
@@ -1088,6 +1206,7 @@ namespace RedxLib
         //======  METHODS  ======
         internal RedXVerifyingDecryptionKey CreateVerifyingDecryptionKey()
         {
+            EnsureNotDisposed();
             // create an internal verifying decryption key from the full key
             return new RedXVerifyingDecryptionKey(this);
         }
@@ -1100,6 +1219,7 @@ namespace RedxLib
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal RedxBufferStream MapData(RedXVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> data, short startLocation, Span<byte> intCat = default)
         {
+            EnsureNotDisposed();
             // normalize startLocation (treat as ushort for full range)
             int start = ((ushort)startLocation) % keyLength;
             int curRow = (start / 256) % keyBlockSize;
@@ -1159,7 +1279,8 @@ namespace RedxLib
                 // map plaintext→column
                 int newCol = rkd[curRow][cur];
                 int dist = newCol - curCol; if (dist < 0) dist += 256;
-                cipher.WriteByte((byte)dist);
+                byte cipherByte = key[curRow * 256 + dist];
+                cipher.WriteByte(cipherByte);
 
                 // record nonce
                 int flatIdx = curRow * 256 + newCol;
@@ -1288,6 +1409,7 @@ namespace RedxLib
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RedxBufferStream MapData(ReadOnlySpan<byte> data, short startLocation, Span<byte> intCat = default)
         {
+            EnsureNotDisposed();
             // wrap startLocation (treat as ushort for full range)
             int start = ((ushort)startLocation) % keyLength;
             var sRow = (start / 256) % keyBlockSize;
@@ -1326,7 +1448,8 @@ namespace RedxLib
                 if (dist < 0)
                     dist += 256;
 
-                output.WriteByte((byte)dist);
+                byte cipherByte = key[curRow * 256 + dist];
+                output.WriteByte(cipherByte);
 
                 // 🔁 Step 4: Advance cursor
                 curCol = col;
@@ -1345,6 +1468,7 @@ namespace RedxLib
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RedxBufferStream MapDataWithObserver(ReadOnlySpan<byte> data, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, Span<byte> checkpointStates32xN)
         {
+            EnsureNotDisposed();
             if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
             if (checkpointCount > 0)
             {
@@ -1403,7 +1527,8 @@ namespace RedxLib
                 obsState[(mixIdx + 5) & 31] ^= (byte)dist;
                 obsState[(mixIdx + 7) & 31] ^= (byte)col;
 
-                output.WriteByte((byte)dist);
+                byte cipherByte = key[curRow * 256 + dist];
+                output.WriteByte(cipherByte);
 
                 curCol = col;
                 curRow = (curRow + 1) % keyBlockSize;
@@ -1432,6 +1557,7 @@ namespace RedxLib
         /// </summary>
         public byte[] ToBytes()
         {
+            EnsureNotDisposed();
             int keyLen = key.Length;
             var buf = new byte[1 + 4 + keyLen];
             buf[0] = KeyBlobVersion;
@@ -1464,6 +1590,7 @@ namespace RedxLib
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RedxBufferStream UnmapData(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat = default, int count = -1)
         {
+            EnsureNotDisposed();
             int start = ((ushort)startLocation) % (keyBlockSize * 256);
             var sRow = start / 256;
             var sCol = start % 256;
@@ -1479,8 +1606,8 @@ namespace RedxLib
 
             for (int i = 0; (count < 0 || i < count) && mapped.Position < mapped.Length; i++)
             {
-                int skipVal = mapped.ReadByte();
-                if (skipVal < 0) break;
+                int cipherVal = mapped.ReadByte();
+                if (cipherVal < 0) break;
 
                 ushort j = bx.NextJump16();
                 int rowJump = (j >> 8) % keyBlockSize;
@@ -1489,12 +1616,14 @@ namespace RedxLib
                 curRow = (curRow + rowJump) % keyBlockSize;
                 curCol = (curCol + colJump) % 256;
 
-                byte plain = key[curRow * 256 + (curCol + skipVal) % 256];
+                int dist = rkd[curRow][(byte)cipherVal];
+                int newCol = (curCol + dist) % 256;
+                byte plain = key[curRow * 256 + newCol];
 
                 if (intCatLen > 0)
                     plain = (byte)((256 + plain - i - intCat[i % intCatLen]) % 256);
 
-                curCol = (curCol + skipVal) % 256;
+                curCol = newCol;
                 curRow = (curRow + 1) % keyBlockSize;
 
                 output.WriteByte(plain);
@@ -1516,6 +1645,7 @@ namespace RedxLib
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public RedxBufferStream UnmapDataWithAuthority(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
         {
+            EnsureNotDisposed();
             if (authorityPublicKey == null) throw new ArgumentNullException(nameof(authorityPublicKey));
             if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
             if (checkpointCount > 0)
@@ -1546,8 +1676,8 @@ namespace RedxLib
 
             for (int i = 0; (count < 0 || i < count) && mapped.Position < mapped.Length; i++)
             {
-                int dist = mapped.ReadByte();
-                if (dist < 0) break;
+                int cipherVal = mapped.ReadByte();
+                if (cipherVal < 0) break;
 
                 ushort jump = bx.NextJump16();
                 int rowJump = (jump >> 8) % keyBlockSize;
@@ -1565,15 +1695,17 @@ namespace RedxLib
                 obsState[(mixIdx + 23) & 31] ^= (byte)step;
                 step++;
 
-                byte plain = key[curRow * 256 + (curCol + dist) % 256];
+                int dist = rkd[curRow][(byte)cipherVal];
+                int newCol = (curCol + dist) % 256;
+                byte plain = key[curRow * 256 + newCol];
                 // bind authority state to the distance encoding and resulting column
                 obsState[(mixIdx + 5) & 31] ^= (byte)dist;
-                obsState[(mixIdx + 7) & 31] ^= (byte)((curCol + dist) % 256);
+                obsState[(mixIdx + 7) & 31] ^= (byte)newCol;
 
                 if (intCatLen > 0)
                     plain = (byte)((256 + plain - i - intCat[i % intCatLen]) % 256);
 
-                curCol = (curCol + dist) % 256;
+                curCol = newCol;
                 curRow = (curRow + 1) % keyBlockSize;
 
                 output.WriteByte(plain);
@@ -1606,6 +1738,101 @@ namespace RedxLib
 
             output.Position = 0;
             return output;
+        }
+
+        /// <summary>
+        /// Reshuffle the key rows in place using the interference catalyst as a deterministic seed source.<br/>
+        /// Each row is Fisher-Yates shuffled with a Blake3 XOF-derived seed; seeds are chained per row to keep the reshuffle deterministic and reproducible.<br/>
+        /// The inverse rows are rebuilt to keep lookups constant-time, and the key hash is intentionally left unchanged (base-key hash).<br/>
+        /// </summary>
+        /// <param name="intCat">Interference catalyst used as the reshuffle seed input.<br/></param>
+        internal void ReshuffleInPlace(ReadOnlySpan<byte> intCat)
+        {
+            EnsureNotDisposed();
+            if (key == null || key.Length == 0 || keyBlockSize == 0)
+                return;
+
+            if (rkd == null || rkd.Length != keyBlockSize)
+                rkd = new byte[keyBlockSize][];
+
+            Span<byte> seed = stackalloc byte[32];
+            using (var seedXof = new Blake3XofReader(ReshuffleDomainBytes, intCat))
+            {
+                seedXof.ReadNext(seed);
+            }
+
+            for (int row = 0; row < keyBlockSize; row++)
+            {
+                var rowSpan = key.AsSpan(row * 256, 256);
+                using (var rowXof = new Blake3XofReader(ReshuffleDomainBytes, seed))
+                {
+                    ShuffleDeterministic(rowSpan, maxExclusive => NextDeterministicInt(rowXof, maxExclusive));
+                }
+
+                var inv = rkd[row];
+                if (inv == null || inv.Length != 256)
+                {
+                    inv = new byte[256];
+                    rkd[row] = inv;
+                }
+
+                for (int col = 0; col < 256; col++)
+                {
+                    inv[rowSpan[col]] = (byte)col;
+                }
+
+                if (row + 1 < keyBlockSize)
+                {
+                    using var nextSeedXof = new Blake3XofReader(ReshuffleDomainBytes, seed);
+                    nextSeedXof.ReadNext(seed);
+                }
+            }
+
+            seed.Clear();
+        }
+
+        /// <summary>
+        /// Throw if the key has been disposed to prevent reuse of wiped material.<br/>
+        /// All public operations call this to enforce teardown semantics.<br/>
+        /// </summary>
+        internal void EnsureNotDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(RedXKey));
+        }
+
+        /// <summary>
+        /// Dispose the key and zero all key material in memory.<br/>
+        /// After disposal, any attempt to use the instance will throw.<br/>
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            if (key != null)
+            {
+                Array.Clear(key, 0, key.Length);
+                key = Array.Empty<byte>();
+            }
+            if (rkd != null)
+            {
+                for (int i = 0; i < rkd.Length; i++)
+                {
+                    var row = rkd[i];
+                    if (row != null)
+                        Array.Clear(row, 0, row.Length);
+                }
+                rkd = Array.Empty<byte[]>();
+            }
+            if (!keyHash.IsEmpty)
+                keyHash.Span.Clear();
+            keyHash = default;
+            keyLength = 0;
+            keyBlockSize = 0;
+
+            _disposed = true;
+            GC.SuppressFinalize(this);
         }
     }
 
@@ -1877,8 +2104,6 @@ namespace RedxLib
                 ushort nonce = MemoryMarshal.Read<ushort>(out16);
                 nonceDest[i] = nonce;
                 uint h32 = RedX.ComputeH32(keyHash, i, nonce);
-                // Note: collisions on h32 are acceptable. The verifier map is lookup-only and origin-locked
-                // by (index, nonce); collisions do not enable minting or allow the verifier to choose mappings.
                 map[h32] = keyBytes[i];
             }
         }
@@ -2056,17 +2281,12 @@ namespace RedxLib
 
             var output = new RedxBufferStream();
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
-            var noncesSpan = nonces.Span;           // masked nonces from verifier key
-            var map = chMap;
-            Span<byte> hashBuf = stackalloc byte[4];
             var streamLength = mapped.Length;
             var streamPos = mapped.Position;
-
             // If a nonce map header was written (dictionary, RLE), or a compact
             // marker, decode it when the caller provided an explicit count. The
             // MapData(vKey, ...) encoding writes either a compact marker+payload
             // or a dictionary/RLE header. We only attempt to decode when count>0.
-            ushort[] perPositionNonces = null;
             if (count > 0)
             {
                 // peek marker
@@ -2082,6 +2302,256 @@ namespace RedxLib
                         var buf = new byte[count];
                         for (int i = 0; i < count; i++) buf[i] = (byte)mapped.ReadByte();
                         // derive keystream and unmask into a RedxBufferStream to return
+                        var ks = new byte[count];
+                        using (var xof = new Blake3XofReader(keyHash.Span, verifyingKeyLock))
+                        {
+                            xof.ReadNext(ks);
+                        }
+                        var outBuf = new byte[count];
+                        for (int i = 0; i < count; i++) outBuf[i] = (byte)(buf[i] ^ ks[i]);
+                        return new RedxBufferStream(outBuf);
+                    }
+                    if (marker == 0x01)
+                    {
+                        int uniqueCount = mapped.ReadByte();
+                        for (int u = 0; u < uniqueCount; u++)
+                            mapped.ReadUInt16();
+                        for (int i = 0; i < count; i++)
+                            mapped.ReadByte();
+                    }
+                    else if (marker == 0x00)
+                    {
+                        int p = 0;
+                        while (p < count)
+                        {
+                            int hdr = mapped.ReadByte();
+                            bool isRepeat = (hdr & 0x80) != 0;
+                            int len = hdr & 0x7F;
+                            if (isRepeat)
+                            {
+                                mapped.ReadUInt16();
+                                p += len;
+                            }
+                            else
+                            {
+                                for (int k = 0; k < len; k++)
+                                    mapped.ReadUInt16();
+                                p += len;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // not a header: rewind one byte and treat as no header
+                        mapped.Position -= 1;
+                    }
+                }
+                streamLength = mapped.Length;
+                streamPos = mapped.Position;
+            }
+
+            BuildBaseKeyBytesAndRkd(out var keyBytes, out var rkdFlat);
+            ReshuffleKeyBytesAndRkdInPlace(keyBytes, rkdFlat, intCat);
+
+            try
+            {
+                for (int i = 0; (count < 0 || i < count) && streamPos < streamLength; i++)
+                {
+                    int cipherVal = mapped.ReadByte();
+                    if (cipherVal < 0) break;
+                    streamPos++;
+
+                    // replay skip
+                    ushort skip = bx.NextJump16();
+                    int colJ = skip & 0xFF;
+                    int rowJ = (skip >> 8) % blockSz;
+
+                    curRow = (curRow + rowJ) % blockSz;
+                    curCol = (curCol + colJ) & 0xFF;
+
+                    // recover index
+                    int rowBase = curRow * 256;
+                    int dist = rkdFlat[rowBase + (byte)cipherVal];
+                    int newCol = (curCol + dist) & 0xFF;
+                    int flatIndex = curRow * 256 + newCol;
+
+                    byte plain = keyBytes[flatIndex];
+
+                    // undo interference catalyst mixing
+                    if (intCatLen > 0)
+                        plain = (byte)((256 + plain - i - intCat[i % intCatLen]) % 256);
+
+                    output.WriteByte(plain);
+
+                    // advance cursor
+                    curCol = newCol;
+                    curRow = (curRow + 1) % blockSz;
+                }
+
+                output.Position = 0;
+                return output;
+            }
+            finally
+            {
+                Array.Clear(keyBytes, 0, keyBytes.Length);
+                Array.Clear(rkdFlat, 0, rkdFlat.Length);
+            }
+        }
+
+        /// <summary>
+        /// Replay a key-row offset stream into plaintext while enforcing authority signatures (verify context).<br/>
+        /// Observer state is updated with both landing bytes and encoded distances so signatures bind to the exact ciphertext evolution.<br/>
+        /// Returns null on any signature failure to ensure provenance is mandatory.
+        /// </summary>
+        /// <summary>
+        /// Decrypt with authority verification using the full key (mirrors verifier-key path but leverages the full permutation).<br/>
+        /// Observer state is recomputed in lockstep and each checkpoint signature is verified before plaintext is emitted further.<br/>
+        /// Returns null on signature failure to avoid emitting unverified plaintext.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public RedxBufferStream UnmapDataWithAuthority(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
+        {
+            if (authorityPublicKey == null) throw new ArgumentNullException(nameof(authorityPublicKey));
+            if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
+            if (checkpointCount > 0)
+            {
+                if (checkpointInterval <= 0) throw new ArgumentOutOfRangeException(nameof(checkpointInterval));
+                if (sigs64xN.Length < checkpointCount * RedX.DefaultAuthoritySigSize)
+                    throw new ArgumentException("sigs64xN too small", nameof(sigs64xN));
+                if (rKeyId32.Length != 32) throw new ArgumentException("rKeyId32 must be 32 bytes", nameof(rKeyId32));
+            }
+
+            int start = ((ushort)startLocation) % keyLength;
+            int curRow = start / 256;
+            int curCol = start % 256;
+            int intCatLen = intCat.Length;
+
+            var bx = new JumpGenerator(keyHash.Span, 1, intCat);
+            Span<byte> obsState = stackalloc byte[RedX.ObserverStateSize];
+            obsState.Clear();
+            uint step = 0;
+            int ckRead = 0;
+
+            Span<byte> msg = stackalloc byte[RedX.AuthorityDomainBytes.Length + 32 + 4 + RedX.ObserverStateSize];
+            var output = new RedxBufferStream();
+            BuildBaseKeyBytesAndRkd(out var keyBytes, out var rkdFlat);
+            ReshuffleKeyBytesAndRkdInPlace(keyBytes, rkdFlat, intCat);
+
+            try
+            {
+                for (int i = 0; (count < 0 || i < count) && mapped.Position < mapped.Length; i++)
+                {
+                    int cipherVal = mapped.ReadByte();
+                    if (cipherVal < 0) break;
+
+                    ushort jump = bx.NextJump16();
+                    int colJump = jump & 0xFF;
+                    int rowJump = (jump >> 8) % keyBlockSize;
+                    curRow = (curRow + rowJump) % keyBlockSize;
+                    curCol = (curCol + colJump) & 0xFF;
+
+                    // landing byte via verifier map
+                    int landingFlat = curRow * 256 + curCol;
+                    byte landing = keyBytes[landingFlat];
+
+                    int mixIdx = (int)(step & 31);
+                    obsState[mixIdx] ^= landing;
+                    obsState[(mixIdx + 11) & 31] ^= (byte)jump;
+                    obsState[(mixIdx + 17) & 31] ^= (byte)(jump >> 8);
+                    obsState[(mixIdx + 23) & 31] ^= (byte)step;
+                    step++;
+
+                    int rowBase = curRow * 256;
+                    int dist = rkdFlat[rowBase + (byte)cipherVal];
+                    int newCol = (curCol + dist) & 0xFF;
+                    // bind authority state to the distance encoding and resulting column
+                    obsState[(mixIdx + 5) & 31] ^= (byte)dist;
+                    obsState[(mixIdx + 7) & 31] ^= (byte)newCol;
+
+                    int flatIndex = curRow * 256 + newCol;
+                    byte plain = keyBytes[flatIndex];
+
+                    if (intCatLen > 0)
+                        plain = (byte)((256 + plain - i - intCat[i % intCatLen]) % 256);
+
+                    curCol = newCol;
+                    curRow = (curRow + 1) % keyBlockSize;
+
+                    output.WriteByte(plain);
+
+                    if (checkpointCount > 0 && ((i + 1) % checkpointInterval) == 0 && ckRead < checkpointCount)
+                    {
+                        int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                        var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                        if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
+                        {
+                            RedX.DebugMint($"verifier authority signature verify failed at checkpoint {ckRead}.");
+                            return null;
+                        }
+                        ckRead++;
+                    }
+                }
+
+                if (checkpointCount > 0 && ckRead < checkpointCount)
+                {
+                    int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                    var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                    if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
+                    {
+                        RedX.DebugMint("verifier authority signature verify failed at final checkpoint.");
+                        return null;
+                    }
+                }
+
+                output.Position = 0;
+                return output;
+            }
+            finally
+            {
+                Array.Clear(keyBytes, 0, keyBytes.Length);
+                Array.Clear(rkdFlat, 0, rkdFlat.Length);
+            }
+        }
+
+        /// <summary>
+        /// Replay a key-row offset stream into plaintext using a precomputed inverse-row map.<br/>
+        /// This avoids rebuilding key rows when the caller already has rkd data (e.g., batched header decode).<br/>
+        /// </summary>
+        /// <param name="mapped">Mapped ciphertext stream positioned at the first payload byte.<br/></param>
+        /// <param name="startLocation">Start location for the walk (ushort domain).<br/></param>
+        /// <param name="verifyingKeyLock">Verifier lock bytes used for compact header XOR mode.<br/></param>
+        /// <param name="intCat">Interference catalyst for jump stream and plaintext mixing.<br/></param>
+        /// <param name="count">Explicit byte count to read, or -1 to read to end.<br/></param>
+        /// <param name="rejectCompactHeader">Reject compact header marker when true.<br/></param>
+        /// <param name="rkdFlat">Inverse rows for distance decoding (row-major).<br/></param>
+        internal RedxBufferStream UnmapDataWithRkd(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> intCat, int count, bool rejectCompactHeader, ReadOnlySpan<byte> rkdFlat)
+        {
+            int start = ((ushort)startLocation) % this.keyLength;
+            int curRow = start / 256;
+            int curCol = start % 256;
+            int intCatLen = intCat.Length;
+            int blockSz = keyBlockSize;
+
+            var output = new RedxBufferStream();
+            var bx = new JumpGenerator(keyHash.Span, 1, intCat);
+            var noncesSpan = nonces.Span;
+            var map = chMap;
+            var streamLength = mapped.Length;
+            var streamPos = mapped.Position;
+
+            ushort[] perPositionNonces = null;
+            if (count > 0)
+            {
+                int marker = mapped.ReadByte();
+                if (marker >= 0)
+                {
+                    const byte CompactMarker = 0xFE;
+                    if (marker == CompactMarker)
+                    {
+                        if (rejectCompactHeader)
+                            return null;
+                        var buf = new byte[count];
+                        for (int i = 0; i < count; i++) buf[i] = (byte)mapped.ReadByte();
                         var ks = new byte[count];
                         using (var xof = new Blake3XofReader(keyHash.Span, verifyingKeyLock))
                         {
@@ -2127,7 +2597,6 @@ namespace RedxLib
                     }
                     else
                     {
-                        // not a header: rewind one byte and treat as no header
                         mapped.Position -= 1;
                     }
                 }
@@ -2137,11 +2606,10 @@ namespace RedxLib
 
             for (int i = 0; (count < 0 || i < count) && streamPos < streamLength; i++)
             {
-                int dist = mapped.ReadByte();
-                if (dist < 0) break;
+                int cipherVal = mapped.ReadByte();
+                if (cipherVal < 0) break;
                 streamPos++;
 
-                // replay skip
                 ushort skip = bx.NextJump16();
                 int colJ = skip & 0xFF;
                 int rowJ = (skip >> 8) % blockSz;
@@ -2149,27 +2617,20 @@ namespace RedxLib
                 curRow = (curRow + rowJ) % blockSz;
                 curCol = (curCol + colJ) & 0xFF;
 
-                // recover index
+                int rowBase = curRow * 256;
+                int dist = rkdFlat[rowBase + (byte)cipherVal];
                 int newCol = (curCol + dist) & 0xFF;
                 int flatIndex = curRow * 256 + newCol;
 
-                // determine nonce: prefer per-position nonce from the encoded header
-                // (if present), otherwise fallback to the verifier key's stored nonce for the flat index
                 ushort r = perPositionNonces != null && i < perPositionNonces.Length ? perPositionNonces[i] : noncesSpan[flatIndex];
-
-                // compute Blake3-derived lookup value to recover plaintext
                 uint h32 = RedX.ComputeH32(keyHash.Span, flatIndex, r);
-
                 if (!map.TryGetValue(h32, out byte plain))
                     throw new CryptographicException($"verifier lookup failed at index {flatIndex}");
 
-                // undo interference catalyst mixing
                 if (intCatLen > 0)
                     plain = (byte)((256 + plain - i - intCat[i % intCatLen]) % 256);
 
                 output.WriteByte(plain);
-
-                // advance cursor
                 curCol = newCol;
                 curRow = (curRow + 1) % blockSz;
             }
@@ -2179,17 +2640,21 @@ namespace RedxLib
         }
 
         /// <summary>
-        /// Replay a key-row offset stream into plaintext while enforcing authority signatures (verify context).<br/>
-        /// Observer state is updated with both landing bytes and encoded distances so signatures bind to the exact ciphertext evolution.<br/>
-        /// Returns null on any signature failure to ensure provenance is mandatory.
+        /// Replay a key-row offset stream into plaintext while enforcing authority signatures using a precomputed inverse-row map.<br/>
+        /// This avoids rebuilding key rows when the caller already has rkd data (e.g., payload + integrity in one pass).<br/>
         /// </summary>
-        /// <summary>
-        /// Decrypt with authority verification using the full key (mirrors verifier-key path but leverages the full permutation).<br/>
-        /// Observer state is recomputed in lockstep and each checkpoint signature is verified before plaintext is emitted further.<br/>
-        /// Returns null on signature failure to avoid emitting unverified plaintext.
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream UnmapDataWithAuthority(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
+        /// <param name="mapped">Mapped ciphertext stream positioned at the first payload byte.<br/></param>
+        /// <param name="startLocation">Start location for the walk (ushort domain).<br/></param>
+        /// <param name="intCat">Interference catalyst for jump stream and plaintext mixing.<br/></param>
+        /// <param name="checkpointInterval">Steps between checkpoints.<br/></param>
+        /// <param name="checkpointCount">Total checkpoint count.<br/></param>
+        /// <param name="sigs64xN">Checkpoint signatures (64 bytes each).<br/></param>
+        /// <param name="authorityPublicKey">Authority public key for verification.<br/></param>
+        /// <param name="rKeyId32">32-byte key identifier bound to signatures.<br/></param>
+        /// <param name="keyBytes">Reshuffled key bytes (row-major) used for landing bytes.<br/></param>
+        /// <param name="rkdFlat">Inverse rows for distance decoding (row-major).<br/></param>
+        /// <param name="count">Explicit byte count to read, or -1 to read to end.<br/></param>
+        internal RedxBufferStream UnmapDataWithAuthorityWithRkd(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, ReadOnlySpan<byte> keyBytes, ReadOnlySpan<byte> rkdFlat, int count = -1)
         {
             if (authorityPublicKey == null) throw new ArgumentNullException(nameof(authorityPublicKey));
             if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
@@ -2213,15 +2678,12 @@ namespace RedxLib
             int ckRead = 0;
 
             Span<byte> msg = stackalloc byte[RedX.AuthorityDomainBytes.Length + 32 + 4 + RedX.ObserverStateSize];
-            var noncesSpan = nonces.Span;
-            var map = chMap;
-
             var output = new RedxBufferStream();
 
             for (int i = 0; (count < 0 || i < count) && mapped.Position < mapped.Length; i++)
             {
-                int dist = mapped.ReadByte();
-                if (dist < 0) break;
+                int cipherVal = mapped.ReadByte();
+                if (cipherVal < 0) break;
 
                 ushort jump = bx.NextJump16();
                 int colJump = jump & 0xFF;
@@ -2229,14 +2691,8 @@ namespace RedxLib
                 curRow = (curRow + rowJump) % keyBlockSize;
                 curCol = (curCol + colJump) & 0xFF;
 
-                // landing byte via verifier map
                 int landingFlat = curRow * 256 + curCol;
-                uint h32Landing = RedX.ComputeH32(keyHash.Span, landingFlat, noncesSpan[landingFlat]);
-                if (!map.TryGetValue(h32Landing, out byte landing))
-                {
-                    RedX.DebugMint($"Verifier landing lookup failed at index {landingFlat}");
-                    throw new CryptographicException($"Verifier landing lookup failed at index {landingFlat}");
-                }
+                byte landing = keyBytes[landingFlat];
 
                 int mixIdx = (int)(step & 31);
                 obsState[mixIdx] ^= landing;
@@ -2245,18 +2701,14 @@ namespace RedxLib
                 obsState[(mixIdx + 23) & 31] ^= (byte)step;
                 step++;
 
+                int rowBase = curRow * 256;
+                int dist = rkdFlat[rowBase + (byte)cipherVal];
                 int newCol = (curCol + dist) & 0xFF;
-                // bind authority state to the distance encoding and resulting column
                 obsState[(mixIdx + 5) & 31] ^= (byte)dist;
                 obsState[(mixIdx + 7) & 31] ^= (byte)newCol;
 
                 int flatIndex = curRow * 256 + newCol;
-                uint h32 = RedX.ComputeH32(keyHash.Span, flatIndex, noncesSpan[flatIndex]);
-                if (!map.TryGetValue(h32, out byte plain))
-                {
-                    RedX.DebugMint($"Verifier lookup failed at index {flatIndex}");
-                    throw new CryptographicException($"Verifier lookup failed at index {flatIndex}");
-                }
+                byte plain = keyBytes[flatIndex];
 
                 if (intCatLen > 0)
                     plain = (byte)((256 + plain - i - intCat[i % intCatLen]) % 256);
@@ -2292,6 +2744,133 @@ namespace RedxLib
 
             output.Position = 0;
             return output;
+        }
+
+        /// <summary>
+        /// Reconstruct the base key bytes and inverse rows from verifier material.<br/>
+        /// Uses the stored nonces and lookup map to rebuild the flat key bytes, then derives the inverse rows for distance decoding.<br/>
+        /// </summary>
+        /// <param name="keyBytes">Reconstructed flat key bytes (row-major).<br/></param>
+        /// <param name="rkdFlat">Inverse rows for distance decoding (row-major).<br/></param>
+        internal void BuildBaseKeyBytesAndRkd(out byte[] keyBytes, out byte[] rkdFlat)
+        {
+            keyBytes = new byte[keyLength];
+            rkdFlat = new byte[keyLength];
+
+            var ns = nonces.Span;
+            var map = chMap;
+            for (int i = 0; i < keyLength; i++)
+            {
+                uint h32 = RedX.ComputeH32(keyHash.Span, i, ns[i]);
+                if (!map.TryGetValue(h32, out byte value))
+                    throw new CryptographicException($"verifier lookup failed while rebuilding key at index {i}");
+                keyBytes[i] = value;
+            }
+
+            BuildInverseRowsFlat(keyBytes, rkdFlat);
+        }
+
+        /// <summary>
+        /// Rebuild inverse row mappings for a flat key buffer.<br/>
+        /// The inverse rows map byte values to column offsets within each row.<br/>
+        /// </summary>
+        /// <param name="keyBytes">Flat key bytes (row-major).<br/></param>
+        /// <param name="rkdFlat">Destination inverse rows (row-major).<br/></param>
+        private static void BuildInverseRowsFlat(ReadOnlySpan<byte> keyBytes, Span<byte> rkdFlat)
+        {
+            int rows = keyBytes.Length / 256;
+            for (int row = 0; row < rows; row++)
+            {
+                int rowBase = row * 256;
+                for (int col = 0; col < 256; col++)
+                {
+                    byte val = keyBytes[rowBase + col];
+                    rkdFlat[rowBase + val] = (byte)col;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reshuffle a flat key buffer in place and rebuild its inverse rows.<br/>
+        /// Seeds are derived from the interference catalyst and chained per row using Blake3 XOF with domain separation.<br/>
+        /// </summary>
+        /// <param name="keyBytes">Flat key bytes to reshuffle in place.<br/></param>
+        /// <param name="rkdFlat">Inverse rows to rebuild for the reshuffled key.<br/></param>
+        /// <param name="intCat">Interference catalyst that seeds the reshuffle.<br/></param>
+        internal static void ReshuffleKeyBytesAndRkdInPlace(Span<byte> keyBytes, Span<byte> rkdFlat, ReadOnlySpan<byte> intCat)
+        {
+            int rows = keyBytes.Length / 256;
+            Span<byte> seed = stackalloc byte[32];
+            using (var seedXof = new Blake3XofReader(RedXKey.ReshuffleDomainBytes, intCat))
+            {
+                seedXof.ReadNext(seed);
+            }
+
+            for (int row = 0; row < rows; row++)
+            {
+                int rowBase = row * 256;
+                var rowSpan = keyBytes.Slice(rowBase, 256);
+                using (var rowXof = new Blake3XofReader(RedXKey.ReshuffleDomainBytes, seed))
+                {
+                    ShuffleDeterministicRow(rowSpan, rowXof);
+                }
+
+                for (int col = 0; col < 256; col++)
+                {
+                    rkdFlat[rowBase + rowSpan[col]] = (byte)col;
+                }
+
+                if (row + 1 < rows)
+                {
+                    using var nextSeedXof = new Blake3XofReader(RedXKey.ReshuffleDomainBytes, seed);
+                    nextSeedXof.ReadNext(seed);
+                }
+            }
+
+            seed.Clear();
+        }
+
+        /// <summary>
+        /// Deterministically shuffle a row using a Blake3 XOF stream as entropy.<br/>
+        /// Implements Fisher-Yates with unbiased sampling to keep permutations uniform.<br/>
+        /// </summary>
+        /// <param name="span">Row data to shuffle in place.<br/></param>
+        /// <param name="xof">Blake3 XOF reader seeded for this row.<br/></param>
+        private static void ShuffleDeterministicRow(Span<byte> span, Blake3XofReader xof)
+        {
+            if (span.IsEmpty || span.Length <= 1)
+                return;
+
+            for (int i = span.Length - 1; i > 0; i--)
+            {
+                int j = NextDeterministicInt(xof, i + 1);
+                byte temp = span[i];
+                span[i] = span[j];
+                span[j] = temp;
+            }
+        }
+
+        /// <summary>
+        /// Produce a uniform random integer in the range [0, maxExclusive) from a Blake3 XOF stream.<br/>
+        /// Uses rejection sampling to avoid modulo bias.<br/>
+        /// </summary>
+        /// <param name="xof">Blake3 XOF reader that supplies entropy.<br/></param>
+        /// <param name="maxExclusive">Exclusive upper bound (must be >0).<br/></param>
+        /// <returns>Uniform random integer in [0, maxExclusive).<br/></returns>
+        private static int NextDeterministicInt(Blake3XofReader xof, int maxExclusive)
+        {
+            if (maxExclusive <= 0) throw new ArgumentOutOfRangeException(nameof(maxExclusive));
+
+            Span<byte> buf = stackalloc byte[4];
+            uint limit = uint.MaxValue - (uint.MaxValue % (uint)maxExclusive);
+            uint value;
+            do
+            {
+                xof.ReadNext(buf);
+                value = MemoryMarshal.Read<uint>(buf);
+            } while (value >= limit);
+
+            return (int)(value % (uint)maxExclusive);
         }
     }
 }

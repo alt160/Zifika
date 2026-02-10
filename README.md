@@ -1,20 +1,20 @@
 # RedX
 
-RedX is is an experimental cryptographic, deterministic, keyed **path-walking** cipher.
+RedX is an experimental cryptographic, deterministic, keyed **path‑walking** cipher.
 
-It walks a keyed 2D permutation grid, using a Blake3-driven jump stream to move the cursor, and emits a **key-row offset stream** as ciphertext. Decryption replays the same walk to recover plaintext.
+It walks a keyed 2D permutation grid, using a Blake3‑driven jump stream to move the cursor, and emits a **row‑encoded action stream** as ciphertext. Decryption replays the same walk to recover plaintext.
 
 RedX ships in two modes:
 
-- **Symmetric mode**: full-key encrypt and decrypt.
-- **Mint and Verify mode**: an origin-locked mode where a **minting key** produces ciphertext and a **verifier key** can decrypt and verify provenance, while the verifier key is intentionally unable to mint ciphertext that passes verification.
+- **Symmetric mode**: full‑key encrypt and decrypt.
+- **Mint and Verify mode**: an origin‑locked mode where a **minting key** produces ciphertext and a **verifier key** can decrypt and verify provenance, while the verifier key is intentionally unable to mint ciphertext that passes verification.
 
 ## Status
 
 This is an experimental construction.
 
 - No formal security proof.
-- Not positioned as a drop-in replacement for AES or ChaCha.
+- Not positioned as a drop‑in replacement for AES or ChaCha.
 - Published to invite analysis, including attempts to develop distinguishers and practical attacks.
 
 ## Core Ideas
@@ -29,64 +29,69 @@ A full key is `keyBlockSize` rows of 256 bytes each.
 
 ### Jump stream
 
-A Blake3-derived generator emits 16-bit jumps (`NextJump16`).
+A Blake3‑derived generator emits 16‑bit jumps (`NextJump16`).
 
 - High byte selects a row delta modulo `keyBlockSize`.
 - Low byte selects a column delta modulo 256.
 
-### Distance encoding
+### Distance encoding (row‑encoded)
 
 For each plaintext byte, the walker:
 
-1. Applies a jump to move `(row, col)` within the RedX key.
+1. Applies a jump to move `(row, col)` within the active RedX key.
 2. Finds the column where the current plaintext byte appears in that row.
-3. Emits the **forward wrapped distance** from the current column to that target column.
-4. Advances to the target column and increments the row.
+3. Computes the **forward wrapped distance** from the current column to that target column.
+4. **Encodes that distance through the current key row** and emits the resulting value as the ciphertext byte.
+5. Advances to the target column and increments the row.
 
-Ciphertext is the stream of these distance bytes emitted by step #3.
+The raw distance is **never emitted directly**. The value placed on the wire is the byte found at `keyRow[distance]`. During decryption, the inverse row mapping recovers the distance before replaying the walk.
 
 ### Ciphertext as an action stream
 
-A useful mental model is that ciphertext bytes are **actions** (relative movements) emitted from a keyed state machine. They are not “transformed plaintext values.”
+A useful mental model is that ciphertext bytes are **actions** (row‑encoded relative movements) emitted from a keyed state machine. They are not transformed plaintext values.
 
 Below is a vertical sketch focused on **what happens** (not how). Time increases upward.
 
 - The **SECRET** column is the hidden cursor state (the landing position after the jump).
-- The **CIPHER** column is what appears on the wire: a symbol plus the corresponding **distance** (forward wrapped steps) from that landing position.
+- The **CIPHER** column is what appears on the wire: a symbol corresponding to a **row‑encoded step** from that landing position.
 
 ```text
 (time / byte index increases upward)
                 ▲
 
-PLAIN      SECRET           CIPHER (distance from landing position)
-─────      ──────           ─────────────────────────────────────
+PLAIN      SECRET           CIPHER (row‑encoded action)
+─────      ──────           ───────────────────────────
 
-  C        land(r,c)  ───►    #    (0xE1, 225 steps)
+  C        land(r,c)  ───►    #    (encoded step)
   ▲          ▲                 ▲
   │          │                 │
-  B        land(r,c)  ───►    j    (0x03,   3 steps)
+  B        land(r,c)  ───►    j    (encoded step)
   ▲          ▲                 ▲
   │          │                 │
-  A        land(r,c)  ───►    2    (0x11,  17 steps)
+  A        land(r,c)  ───►    2    (encoded step)
 
 (seeded by key + startLoc + intCat)
 ```
 
-Key point: the wire byte is the **distance / step count** (`0xNN`) to advance from the current secret landing position to the column of the next mixed plaintext byte. Without the keyed walk state, these distances are not directly interpretable as value transformations.
+Key point: the wire byte represents an **encoded action**, not a numeric distance. Without the keyed walk state and row permutation, these bytes are not directly interpretable.
 
+An encoded step is the value obtained by indexing the active key row with the forward wrapped distance (`encodedStep = keyRow[distance]`). It is a row-permutation value that indirectly represents how far the cursor must move, but reveals neither the distance nor the target column without the inverse row mapping and the current walk state.
+
+Without the keyed walk state and row permutation, these bytes are not directly interpretable.
 ### Interference catalyst
 
-A per-message byte array called the **interference catalyst** (`intCat`) is a random-length quantity of random bytes carried in the ciphertext header.
+A per‑message byte array called the **interference catalyst** (`intCat`) is a random‑length quantity of random bytes carried in the ciphertext header.
 
 - Encrypt side: `plain = (plain + i + intCat[i % intCatLen]) mod 256`
 - Decrypt side: `plain = (plain - i - intCat[i % intCatLen]) mod 256`
 
-`intCat` has a few distinct roles in RedX (all of which matter):
+`intCat` has several distinct roles in RedX:
 
-1. **Ciphertext length variability**: it introduces a variable-length header contribution so ciphertext length is not equal to plaintext length.
-2. **Per-message walk diversification**: it is fed into the jump generator, causing the path-walk to differ per message even under the same key.
-3. **Index-dependent payload mixing**: it perturbs each payload byte by its position `i` and the catalyst byte, so the same plaintext value at different positions maps differently.
+1. **Ciphertext length variability**: it introduces a variable‑length header contribution so ciphertext length is not equal to plaintext length.
+2. **Per‑message walk diversification**: it is fed into the jump generator, causing the path‑walk to differ per message even under the same key.
+3. **Index‑dependent payload mixing**: it perturbs each payload byte by its position `i` and the catalyst byte, so the same plaintext value at different positions maps differently.
 4. **Payload boundary obscuring**: because `intCatLen` varies and the catalyst bytes are present early in the encrypted header, it becomes harder to infer where the payload begins from structure alone.
+5. **Per‑message key reshaping**: `intCat` is used to reshuffle the base RedX key (via Fisher–Yates) before payload processing, producing a message‑specific ephemeral key that is not reused across encryptions.
 
 `intCat` is also included in the optional integrity seal computation.
 
@@ -95,36 +100,12 @@ A per-message byte array called the **interference catalyst** (`intCat`) is a ra
 When enabled, RedX appends an encrypted integrity seal to the ciphertext.
 
 - Seal length: **32 bytes (256 bits)** in the current implementation.
-- Seal material: `integritySeal32B = Blake3(rowOffsetStream || intCat)`.
+- Seal material: `integritySeal32B = Blake3(rowEncodedStream || intCat)`.
 - The seal bytes are appended **in mapped (encrypted) form**.
 
-Decryption recomputes the expected seal and compares it to the decrypted seal. If the integrity check fails, decryption returns `null` (no partial/garbled output).
+Decryption recomputes the expected seal and compares it to the decrypted seal. If the integrity check fails, decryption returns `null`. Plaintext is not materialized internally unless verification succeeds.
 
-This provides tamper and corruption detection with a fail-closed decryption behavior: modified ciphertext is rejected before any plaintext is released.
-
-## Modes
-
-RedX exposes two encryption modes with different key material and verification guarantees.
-
-### Symmetric mode
-
-- Uses a full `RedXKey` to encrypt and decrypt.
-- Suitable for single-domain use where the decryptor can also mint ciphertext.
-
-### Mint and Verify mode
-
-- Uses a `RedXMintingKey` to mint ciphertext and a `RedXVerifierKey` to verify and decrypt.
-- Verifier keys can decrypt and validate authority checkpoints but cannot mint ciphertext that verifies.
-- Mint and Verify is intended for origin-locking and provenance-bound ciphertext, not general public-key encryption.
-- 
->#### Example use case
->
->A common use case for Mint and Verify is **origin-locked software artifacts** (like licenses, configurations, etc).
->
->A publisher can mint encrypted payloads (configuration blobs, feature manifests, embedded data, or content) using a `RedXMintingKey`. Distributed verifier keys can decrypt and verify provenance, but are intentionally unable to mint new ciphertext that will pass verification.
->
->This supports scenarios where decryption authority is required without granting the ability to produce new, authority-valid data.
-
+This provides tamper and corruption detection with a fail‑closed decryption behavior: modified ciphertext is rejected before any plaintext is released.
 
 ## Key Types
 
@@ -132,13 +113,13 @@ RedX exposes two encryption modes with different key material and verification g
 
 Full key used for symmetric mode and for deriving verifier keys.
 
-- Holds the permutation rows (`keyBytes`), inverse rows (`rkd`), and a 64-byte Blake3 digest of the key bytes (`keyHash`).
+- Holds the permutation rows (`keyBytes`), inverse rows (`rkd`), and a 64‑byte Blake3 digest of the key bytes (`keyHash`).
 
 ### `RedXMintingKey`
 
 Minting composite key.
 
-- Contains a `RedXKey` plus an **authority** ECDSA P-256 keypair (private PKCS#8 + public SPKI).
+- Contains a `RedXKey` plus an **authority** ECDSA P‑256 keypair (private PKCS#8 + public SPKI).
 - Can mint signed ciphertext and derive a verifier key.
 
 ### `RedXVerifierKey`
@@ -252,6 +233,8 @@ Given:
 
 RedX produces identical ciphertext.
 
+Although the payload key is reshuffled per message, the reshuffle is fully determined by `intCat`; therefore determinism still holds when `startLocation` and `intCat` are identical.
+
 In normal use, `startLocation` and `intCat` are randomized per message, which makes ciphertext vary in length and content between encryptions over the same plaintext.
 
 ## What to review
@@ -270,7 +253,7 @@ RedX does not claim:
 
 - to be a proven secure cipher
 - to replace standardized ciphers
-- to be post-quantum secure
+- to be post‑quantum secure
 
 ## License
 
