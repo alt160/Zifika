@@ -3,7 +3,7 @@ using System.Buffers;
 using System.Runtime.InteropServices;
 using Blake3;
 
-namespace RedxLib
+namespace ZifikaLib
 {
     public sealed class Blake3XofReader : IDisposable
     {

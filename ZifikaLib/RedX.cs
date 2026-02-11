@@ -15,46 +15,46 @@ using System.Text;
 
 
 
-namespace RedxLib
+namespace ZifikaLib
 {
     /// <summary>
-    /// The <see cref="RedX"/> class exposes the public surface for the RedX path-walking cipher.<br/>
+    /// The <see cref="Zifika"/> class exposes the public surface for the Zifika path-walking cipher.<br/>
     /// The cipher walks a keyed 2D permutation grid, uses an internal jump stream, and emits a key-row offset stream as ciphertext that is replayed to recover plaintext.<br/>
-    /// RedX supports both symmetric encrypt/decrypt (full key) and a producer-locked<br/>
+    /// Zifika supports both symmetric encrypt/decrypt (full key) and a producer-locked<br/>
     /// Mint/Verify mode that enables decryption with a verifier key that is unable to produce ciphertext that itself is allowed to decrypt.<br/>
     /// This class concentrates entry points and domain-level constants to keep the algorithm auditable and frictionless to consume.<br/>
     /// <example>
     /// Symmetric encrypt/decrypt (full key):<br/>
     /// <code><![CDATA[
-    /// var key = RedX.CreateKey();
+    /// var key = Zifika.CreateKey();
     /// var plaintext = Encoding.UTF8.GetBytes("hello");
-    /// var cipher = RedX.Encrypt(plaintext, key);
-    /// var recovered = RedX.Decrypt(cipher, key);
+    /// var cipher = Zifika.Encrypt(plaintext, key);
+    /// var recovered = Zifika.Decrypt(cipher, key);
     /// // recovered holds "hello"
     /// ]]></code>
     /// </example>
     /// <example>
     /// Mint/Verify with minting/verifier composites (no direct ECDsa handling):<br/>
     /// <code><![CDATA[
-    /// var (minting, verifier) = RedX.CreateMintingKeyPair();
-    /// var cipher = RedX.EncryptMint(data, minting);
-    /// var recovered = RedX.DecryptMintWithAuthority(cipher, verifier);
+    /// var (minting, verifier) = Zifika.CreateMintingKeyPair();
+    /// var cipher = Zifika.EncryptMint(data, minting);
+    /// var recovered = Zifika.DecryptMintWithAuthority(cipher, verifier);
     /// var mintingBlob = minting.ToBytes();
     /// var verifierBlob = verifier.ToBytes();
-    /// var minting2 = RedX.CreateMintingKey(mintingBlob);
-    /// var verifier2 = RedX.CreateVerifierKey(verifierBlob);
+    /// var minting2 = Zifika.CreateMintingKey(mintingBlob);
+    /// var verifier2 = Zifika.CreateVerifierKey(verifierBlob);
     /// ]]></code>
     /// </example>
     /// </summary>
     //====== TYPES ======
-    public static class RedX
+    public static class Zifika
     {
         // ---------------------------------------------------------------------
         // Mint/Verify (origin-locked) authority mode
         // ---------------------------------------------------------------------
         // Domain separator for authority checkpoint signatures (byte[] to avoid span field restrictions)
         //Shared/Static Members
-        internal static readonly byte[] AuthorityDomainBytes = "REDX_AUTH_CKPT_V1"u8.ToArray();
+        internal static readonly byte[] AuthorityDomainBytes = "Zifika_AUTH_CKPT_V1"u8.ToArray();
         /// <summary>
         /// Build the authority-signed message for a given checkpoint.<br/>
         /// Layout: domain separator || rKeyId32 || checkpointIndex (LE) || observerState32.
@@ -122,45 +122,45 @@ namespace RedxLib
             return MemoryMarshal.Read<uint>(out4);
         }
         /// <summary>
-        /// Create a full RedX key using a system provided random source seed.<br/>
+        /// Create a full Zifika key using a system provided random source seed.<br/>
         /// keySize controls the number of 256-byte rows in the permutation grid; the default (8) targets typical payload sizes.<br/>
         /// </summary>
-        public static RedXKey CreateKey(byte keySize = 8)
+        public static ZifikaKey CreateKey(byte keySize = 8)
         {
-            return new RedXKey(keySize);
+            return new ZifikaKey(keySize);
         }
         /// <summary>
-        /// Create a deterministic RedX key using a caller-provided seed.<br/>
+        /// Create a deterministic Zifika key using a caller-provided seed.<br/>
         /// keySize controls the number of 256-byte rows in the permutation grid; the default (8) targets typical payload sizes.<br/>
         /// </summary>
-        public static RedXKey CreateKey(ReadOnlySpan<byte> seed, byte keySize = 8)
+        public static ZifikaKey CreateKey(ReadOnlySpan<byte> seed, byte keySize = 8)
         {
-            if (seed.Length < RedXKey.MinSeedLength)
-                throw new ArgumentException($"Seed must be at least {RedXKey.MinSeedLength} bytes", nameof(seed));
-            return new RedXKey(keySize, seed);
+            if (seed.Length < ZifikaKey.MinSeedLength)
+                throw new ArgumentException($"Seed must be at least {ZifikaKey.MinSeedLength} bytes", nameof(seed));
+            return new ZifikaKey(keySize, seed);
         }
         /// <summary>
-        /// Rehydrate a full key from the serialized blob produced by RedXKey.ToBytes().<br/>
-        /// Provides a frictionless entry point for callers that stay on the RedX static surface.<br/>
+        /// Rehydrate a full key from the serialized blob produced by ZifikaKey.ToBytes().<br/>
+        /// Provides a frictionless entry point for callers that stay on the Zifika static surface.<br/>
         /// </summary>
-        public static RedXKey CreateKeyFromBytes(ReadOnlySpan<byte> serializedKey)
+        public static ZifikaKey CreateKeyFromBytes(ReadOnlySpan<byte> serializedKey)
         {
-            return RedXKey.FromBytes(serializedKey);
+            return ZifikaKey.FromBytes(serializedKey);
         }
         /// <summary>
         /// Rehydrate a minting key from its serialized blob.
         /// Use this when the minter needs to mint new ciphertexts or derive a verifier key.
         /// </summary>
-        public static RedXMintingKey CreateMintingKey(ReadOnlySpan<byte> mintingKey)
+        public static ZifikaMintingKey CreateMintingKey(ReadOnlySpan<byte> mintingKey)
         {
-            return RedXMintingKey.FromBytes(mintingKey);
+            return ZifikaMintingKey.FromBytes(mintingKey);
         }
         /// <summary>
         /// Create a minting/verifier key pair.
         /// Generates a fresh P-256 authority key (compact 64-byte P1363 signatures; widely supported) to sign checkpoints.
         /// Returns both minting and verifier composites so callers can hand off the verifier to consumers.
         /// </summary>
-        public static (RedXMintingKey minting, RedXVerifierKey verifier) CreateMintingKeyPair()
+        public static (ZifikaMintingKey minting, ZifikaVerifierKey verifier) CreateMintingKeyPair()
         {
             var fullKey = CreateKey();
             var verifyingKey = fullKey.CreateVerifyingDecryptionKey();
@@ -168,15 +168,15 @@ namespace RedxLib
             var authPriv = authority.ExportPkcs8PrivateKey();
             var authPub = authority.ExportSubjectPublicKeyInfo();
 
-            var minting = new RedXMintingKey(fullKey, authPriv, authPub);
-            var verifier = new RedXVerifierKey(verifyingKey, authPub);
+            var minting = new ZifikaMintingKey(fullKey, authPriv, authPub);
+            var verifier = new ZifikaVerifierKey(verifyingKey, authPub);
             return (minting, verifier);
         }
         /// <summary>
         /// Rehydrate a minting/verifier pair from serialized blobs produced by CreateMintingKeyPair().<br/>
         /// Validates that the authority public key in both blobs matches to prevent mismatched inputs.
         /// </summary>
-        public static (RedXMintingKey minting, RedXVerifierKey verifier) CreateMintingKeyPair(ReadOnlySpan<byte> mintingKey, ReadOnlySpan<byte> verifierKey)
+        public static (ZifikaMintingKey minting, ZifikaVerifierKey verifier) CreateMintingKeyPair(ReadOnlySpan<byte> mintingKey, ReadOnlySpan<byte> verifierKey)
         {
             var m = CreateMintingKey(mintingKey);
             var v = CreateVerifierKey(verifierKey);
@@ -188,9 +188,9 @@ namespace RedxLib
         /// Rehydrate a verifier key from its serialized blob.
         /// Use this on the consumer side to decrypt/verify authority checkpoints without holding the minting material.
         /// </summary>
-        public static RedXVerifierKey CreateVerifierKey(ReadOnlySpan<byte> verifierKey)
+        public static ZifikaVerifierKey CreateVerifierKey(ReadOnlySpan<byte> verifierKey)
         {
-            return RedXVerifierKey.FromBytes(verifierKey);
+            return ZifikaVerifierKey.FromBytes(verifierKey);
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void DebugMint(string message)
@@ -203,7 +203,7 @@ namespace RedxLib
         /// Assumes the symmetric wire layout: enc(startLocation1Bit) | enc(intCatLen) | enc(intCat) | key-row offset stream | [enc(integritySeal, optional)].<br/>
         /// When requireIntegrity is true, a 32-byte integrity seal must be present and valid; when false, no integrity seal is expected. Missing/invalid integrity fails decryption (no fallback).<br/>
         /// </summary>
-        public static RedxBufferStream Decrypt(RedxBufferStream ciphertext, RedXKey key, bool requireIntegrity = true)
+        public static ZifikaBufferStream Decrypt(ZifikaBufferStream ciphertext, ZifikaKey key, bool requireIntegrity = true)
         {
             if (ciphertext == null) throw new ArgumentNullException(nameof(ciphertext));
             if (key == null) throw new ArgumentNullException(nameof(key));
@@ -211,8 +211,8 @@ namespace RedxLib
 
             byte[] rowOffsetBytes = null;
             byte[] integrityBytes = null;
-            RedxBufferStream intCat = null;
-            RedXKey workingKey = null;
+            ZifikaBufferStream intCat = null;
+            ZifikaKey workingKey = null;
 
             try
             {
@@ -234,7 +234,7 @@ namespace RedxLib
                 rowOffsetBytes = ciphertext.ReadBytes(rowOffsetLen);
                 integrityBytes = requireIntegrity ? ciphertext.ReadBytes(integrityLen) : Array.Empty<byte>();
 
-                workingKey = RedXKey.RehydrateFromRawKeyBytes(key.key);
+                workingKey = ZifikaKey.RehydrateFromRawKeyBytes(key.key);
                 workingKey.ReshuffleInPlace(intCat.AsReadOnlySpan);
 
                 if (requireIntegrity)
@@ -245,13 +245,13 @@ namespace RedxLib
                     b3.Update(intCat.AsReadOnlySpan);
                     Span<byte> integrity2 = stackalloc byte[32];
                     b3.Finalize(integrity2);
-                    using var integrityPlain = workingKey.UnmapData(new RedxBufferStream(integrityBytes), startLocation, intCat.AsReadOnlySpan, 32);
+                    using var integrityPlain = workingKey.UnmapData(new ZifikaBufferStream(integrityBytes), startLocation, intCat.AsReadOnlySpan, 32);
                     if (integrityPlain == null || !integrityPlain.AsReadOnlySpan.SequenceEqual(integrity2))
                         return null;
                     integrityPlain.ClearBuffer();
                 }
 
-                var plain = workingKey.UnmapData(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan);
+                var plain = workingKey.UnmapData(new ZifikaBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan);
                 plain.Position = 0;
                 return plain;
             }
@@ -274,26 +274,26 @@ namespace RedxLib
         /// Overload for byte[] ciphertext convenience for symmetric decrypt.
         /// Wraps the byte array in a BufferStream and forwards to the symmetric decrypt path.
         /// </summary>
-        public static RedxBufferStream Decrypt(byte[] ciphertext, RedXKey key, bool requireIntegrity = true)
+        public static ZifikaBufferStream Decrypt(byte[] ciphertext, ZifikaKey key, bool requireIntegrity = true)
         {
-            return Decrypt(new RedxBufferStream(ciphertext), key, requireIntegrity);
+            return Decrypt(new ZifikaBufferStream(ciphertext), key, requireIntegrity);
         }
         /// <summary>
         /// Symmetric encrypt using only the full key.<br/>
         /// Wire layout: enc(startLocation1Bit) | enc(intCatLen) | enc(intCat) | key-row offset stream | [enc(integritySeal, optional when useIntegrity=true)].<br/>
         /// Integrity seal is computed over key-row offset stream||intCat; when useIntegrity is false the seal is omitted entirely.<br/>
         /// </summary>
-        public static RedxBufferStream Encrypt(byte[] data, RedXKey key, bool useIntegrity = true)
+        public static ZifikaBufferStream Encrypt(byte[] data, ZifikaKey key, bool useIntegrity = true)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (key == null) throw new ArgumentNullException(nameof(key));
             key.EnsureNotDisposed();
 
-            var ret = new RedxBufferStream();
+            var ret = new ZifikaBufferStream();
             byte[] startBuf = null;
             byte[] intCat = null;
             byte[] rowOffsetBytes = null;
-            RedXKey workingKey = null;
+            ZifikaKey workingKey = null;
 
             try
             {
@@ -315,7 +315,7 @@ namespace RedxLib
                     ret.Write(intCatEnc);
 
                 // 2b) reshuffle a working key clone using the interference catalyst
-                workingKey = RedXKey.RehydrateFromRawKeyBytes(key.key);
+                workingKey = ZifikaKey.RehydrateFromRawKeyBytes(key.key);
                 workingKey.ReshuffleInPlace(intCat);
 
                 // 3) key-row offset stream
@@ -358,21 +358,21 @@ namespace RedxLib
         /// <param name="vKeyTarget">Verifier key that will decrypt control-stream headers; null is allowed for full-key-only consumers.</param>
         /// <param name="authorityPrivateKeyPkcs8">Authority private key in PKCS#8 format used to sign checkpoints.</param>
         /// <param name="maxCheckpoints">Upper bound to defend against oversized metadata for large payloads.</param>
-        internal static RedxBufferStream Mint(byte[] data, RedXKey key, RedXVerifyingDecryptionKey vKeyTarget, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
+        internal static ZifikaBufferStream Mint(byte[] data, ZifikaKey key, ZifikaVerifyingDecryptionKey vKeyTarget, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (authorityPrivateKeyPkcs8.IsEmpty) throw new ArgumentException("authority private key is required", nameof(authorityPrivateKeyPkcs8));
             key.EnsureNotDisposed();
 
             // output ciphertext buffer
-            var ret = new RedxBufferStream();
+            var ret = new ZifikaBufferStream();
             byte[] vKeyLockBytes = null;
             byte[] startBuf = null;
             byte[] intCat = null;
             byte[] cipherBytes = null;
             byte[] sigs = null;
             byte[] ckStates = null;
-            RedXKey payloadKey = null;
+            ZifikaKey payloadKey = null;
 
             try
             {
@@ -400,7 +400,7 @@ namespace RedxLib
                 // 4) interference catalyst (payload)
                 var intCatLen = (byte)RandomNumberGenerator.GetInt32(7, 64);
                 intCat = RandomNumberGenerator.GetBytes(intCatLen);
-                payloadKey = RedXKey.RehydrateFromRawKeyBytes(key.key);
+                payloadKey = ZifikaKey.RehydrateFromRawKeyBytes(key.key);
                 payloadKey.ReshuffleInPlace(intCat);
 
                 // Strategy: for small/medium payloads use a single accumulator signature; for larger payloads use checkpoints up to maxCheckpoints.
@@ -564,7 +564,7 @@ namespace RedxLib
         /// <summary>
         /// Mint (sign + produce ciphertext) using a full key and optional verifier-targeted header.
         /// </summary>
-        public static RedxBufferStream Mint(ReadOnlySpan<byte> data, RedXKey key, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
+        public static ZifikaBufferStream Mint(ReadOnlySpan<byte> data, ZifikaKey key, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
         {
             return Mint(data.ToArray(), key, null, authorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity);
         }
@@ -572,7 +572,7 @@ namespace RedxLib
         /// Mint using a minting key composite.
         /// Uses the minting key's full key for payload encryption, derives a verifier key for the header, and signs checkpoints with its authority private key.
         /// </summary>
-        public static RedxBufferStream Mint(ReadOnlySpan<byte> data, RedXMintingKey mintingKey, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
+        public static ZifikaBufferStream Mint(ReadOnlySpan<byte> data, ZifikaMintingKey mintingKey, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
         {
             if (mintingKey == null) throw new ArgumentNullException(nameof(mintingKey));
             var verifier = mintingKey.CreateVerifierKey();
@@ -588,7 +588,7 @@ namespace RedxLib
         /// <param name="intCat">Header interference catalyst (vKeyLock for verifier headers, empty for symmetric).<br/></param>
         /// <param name="startLocation">Decoded start location value (ushort range).<br/></param>
         /// <returns>True on success; false on failure.<br/></returns>
-        private static bool TryReadStartLocation1Bit(RedXKey key, RedxBufferStream ciphertext, ReadOnlySpan<byte> intCat, out ushort startLocation)
+        private static bool TryReadStartLocation1Bit(ZifikaKey key, ZifikaBufferStream ciphertext, ReadOnlySpan<byte> intCat, out ushort startLocation)
         {
             startLocation = 0;
             if (key == null || ciphertext == null) return false;
@@ -660,7 +660,7 @@ namespace RedxLib
         /// <param name="vKeyLock">Verifier key lock bytes for keystream derivation.<br/></param>
         /// <param name="startLocation">Decoded start location value (ushort range).<br/></param>
         /// <returns>True on success; false on failure.<br/></returns>
-        private static bool TryReadStartLocation1BitVKeyCompact(RedXVerifyingDecryptionKey verifyingKey, RedxBufferStream ciphertext, ReadOnlySpan<byte> verifyingKeyLock, out ushort startLocation)
+        private static bool TryReadStartLocation1BitVKeyCompact(ZifikaVerifyingDecryptionKey verifyingKey, ZifikaBufferStream ciphertext, ReadOnlySpan<byte> verifyingKeyLock, out ushort startLocation)
         {
             startLocation = 0;
             if (verifyingKey == null || ciphertext == null) return false;
@@ -711,7 +711,7 @@ namespace RedxLib
         /// Integrity seal is computed over key-row offset stream||intCat; when requireIntegrity is true the seal must be present and valid; when false, no seal is expected. Missing/invalid integrity fails decryption (no fallback).<br/>
         /// Checkpoints/signatures are always required for provenance.<br/>
         /// </summary>
-        internal static RedxBufferStream VerifyAndDecrypt(RedxBufferStream ciphertext, RedXVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> authorityPublicKeySpki, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool requireIntegrity = true)
+        internal static ZifikaBufferStream VerifyAndDecrypt(ZifikaBufferStream ciphertext, ZifikaVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> authorityPublicKeySpki, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool requireIntegrity = true)
         {
             if (ciphertext == null) throw new ArgumentNullException(nameof(ciphertext));
             if (verifyingKey == null) throw new ArgumentNullException(nameof(verifyingKey));
@@ -725,7 +725,7 @@ namespace RedxLib
                 byte[] sigs = null;
                 byte[] rowOffsetBytes = null;
                 byte[] integrityEnc = null;
-                RedxBufferStream intCat = null;
+                ZifikaBufferStream intCat = null;
 
                 try
                 {
@@ -778,7 +778,7 @@ namespace RedxLib
                     if (intCat == null || intCat.Length != intCatLen)
                         throw new InvalidDataException("Interference catalyst header decode failed (verifier path).");
 
-                    RedXVerifyingDecryptionKey.ReshuffleKeyBytesAndRkdInPlace(keyBytes, rkdFlat, intCat.AsReadOnlySpan);
+                    ZifikaVerifyingDecryptionKey.ReshuffleKeyBytesAndRkdInPlace(keyBytes, rkdFlat, intCat.AsReadOnlySpan);
 
                     int remaining = (int)(ciphertext.Length - ciphertext.Position);
                     // Integrity seal is verifier-key mapped; compact encoding adds a 1-byte marker.
@@ -795,7 +795,7 @@ namespace RedxLib
                             DebugMint($"VerifyAndDecrypt(vKey) integrityEnc length mismatch (got {integrityEnc.Length}, want {integrityEncodedLen})");
                             return null;
                         }
-                        using var integrityPlain = verifyingKey.UnmapDataWithRkd(new RedxBufferStream(integrityEnc), startLocation, verifyingKeyLock, intCat.AsReadOnlySpan, 32, false, rkdFlat);
+                        using var integrityPlain = verifyingKey.UnmapDataWithRkd(new ZifikaBufferStream(integrityEnc), startLocation, verifyingKeyLock, intCat.AsReadOnlySpan, 32, false, rkdFlat);
                         if (integrityPlain == null || integrityPlain.Length != 32)
                         {
                             DebugMint("VerifyAndDecrypt(vKey) integrityPlain null/len!=32");
@@ -834,7 +834,7 @@ namespace RedxLib
                     using (var ecdsa = ECDsa.Create())
                     {
                         ecdsa.ImportSubjectPublicKeyInfo(authorityPublicKeySpki, out _);
-                        using var verifyOnly = verifyingKey.UnmapDataWithAuthorityWithRkd(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa, rKeyId32, keyBytes, rkdFlat, count: cipherLen);
+                        using var verifyOnly = verifyingKey.UnmapDataWithAuthorityWithRkd(new ZifikaBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa, rKeyId32, keyBytes, rkdFlat, count: cipherLen);
                         if (verifyOnly == null)
                             return null;
                         verifyOnly.ClearBuffer();
@@ -842,7 +842,7 @@ namespace RedxLib
 
                     using var ecdsa2 = ECDsa.Create();
                     ecdsa2.ImportSubjectPublicKeyInfo(authorityPublicKeySpki, out _);
-                    var plain = verifyingKey.UnmapDataWithAuthorityWithRkd(new RedxBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa2, rKeyId32, keyBytes, rkdFlat, count: cipherLen);
+                    var plain = verifyingKey.UnmapDataWithAuthorityWithRkd(new ZifikaBufferStream(rowOffsetBytes), startLocation, intCat.AsReadOnlySpan, interval, ckCount, sigs, ecdsa2, rKeyId32, keyBytes, rkdFlat, count: cipherLen);
                     if (plain == null) return null;
                     plain.Position = 0;
                     return plain;
@@ -877,7 +877,7 @@ namespace RedxLib
         /// Convenience overload that uses a verifier composite for verify+decrypt.
         /// Returns null on any failure and never emits plaintext without successful verification.
         /// </summary>
-        public static RedxBufferStream VerifyAndDecrypt(RedxBufferStream ciphertext, RedXVerifierKey verifierKey, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool requireIntegrity = true)
+        public static ZifikaBufferStream VerifyAndDecrypt(ZifikaBufferStream ciphertext, ZifikaVerifierKey verifierKey, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool requireIntegrity = true)
         {
             if (verifierKey == null) throw new ArgumentNullException(nameof(verifierKey));
             return VerifyAndDecrypt(ciphertext, verifierKey.Key, verifierKey.AuthorityPublicKeySpki, maxCheckpoints, requireIntegrity);
@@ -905,18 +905,18 @@ namespace RedxLib
     }
 
     /// <summary>
-    /// Full RedX key used for encryption and for deriving verifier keys.<br/>
+    /// Full Zifika key used for encryption and for deriving verifier keys.<br/>
     /// Holds the permutation rows, inverse lookup tables, and Blake3 key hash that seeds jump generators.<br/>
     /// Consumers encrypt with this type; verifier keys derived from it can decrypt without exposing the forward permutation.
     /// </summary>
-    public class RedXKey : IDisposable
+    public class ZifikaKey : IDisposable
     {
         /// <summary>
         /// Rehydrate a key from the serialized blob produced by ToBytes().<br/>
         /// Validates the version, enforces keyLen divisibility by 256, and recomputes inverse rows and key hash.<br/>
         /// </summary>
         //Shared/Static Members
-        public static RedXKey FromBytes(ReadOnlySpan<byte> blob)
+        public static ZifikaKey FromBytes(ReadOnlySpan<byte> blob)
         {
             if (blob.Length < 1 + 4) throw new ArgumentException("Key blob too small", nameof(blob));
             byte ver = blob[0];
@@ -930,7 +930,7 @@ namespace RedxLib
         /// Rehydrate a key from a hex-encoded serialized blob (same layout as ToBytes()).<br/>
         /// Trims surrounding whitespace and validates the hex payload before reconstruction.<br/>
         /// </summary>
-        public static RedXKey FromHex(string hex)
+        public static ZifikaKey FromHex(string hex)
         {
             if (hex == null) throw new ArgumentNullException(nameof(hex));
             var trimmed = hex.Trim();
@@ -941,7 +941,7 @@ namespace RedxLib
         /// Internal helper to rebuild a key from raw permutation bytes (length divisible by 256).<br/>
         /// Recomputes inverse rows and key hash to keep downstream operations deterministic.<br/>
         /// </summary>
-        internal static RedXKey RehydrateFromRawKeyBytes(ReadOnlySpan<byte> keyBytes)
+        internal static ZifikaKey RehydrateFromRawKeyBytes(ReadOnlySpan<byte> keyBytes)
         {
             if (keyBytes.Length == 0 || (keyBytes.Length % 256) != 0)
                 throw new ArgumentException("Key bytes length must be a positive multiple of 256", nameof(keyBytes));
@@ -950,7 +950,7 @@ namespace RedxLib
             if (blockSize > byte.MaxValue)
                 throw new InvalidOperationException("Key block size exceeds supported range");
 
-            var key = new RedXKey((byte)blockSize)
+            var key = new ZifikaKey((byte)blockSize)
             {
                 key = keyBytes.ToArray(),
                 keyLength = keyBytes.Length,
@@ -1082,8 +1082,8 @@ namespace RedxLib
         //======  FIELDS  ======
         internal const int MinSeedLength = 16;
         private const byte KeyBlobVersion = 1;
-        private static readonly byte[] KeySeedDomainBytes = "REDX_KEY_SEED_V1"u8.ToArray();
-        internal static readonly byte[] ReshuffleDomainBytes = "REDX_RESHUFFLE_V1"u8.ToArray();
+        private static readonly byte[] KeySeedDomainBytes = "Zifika_KEY_SEED_V1"u8.ToArray();
+        internal static readonly byte[] ReshuffleDomainBytes = "Zifika_RESHUFFLE_V1"u8.ToArray();
 
 
 
@@ -1107,20 +1107,20 @@ namespace RedxLib
 
 
         /// <summary>
-        /// Create a full RedX key with the given row count (keySize).<br/>
+        /// Create a full Zifika key with the given row count (keySize).<br/>
         /// Each row is a Fisher-Yates shuffle of byte values, forming the keyed 2D permutation used by the walk and key-row offset stream.
         /// </summary>
         //======  CONSTRUCTORS  ======
-        public RedXKey(byte keySize = 8)
+        public ZifikaKey(byte keySize = 8)
         {
             InitializeKey(keySize, maxExclusive => RandomNumberGenerator.GetInt32(maxExclusive));
         }
 
         /// <summary>
-        /// Create a deterministic RedX key using a caller-provided seed.<br/>
+        /// Create a deterministic Zifika key using a caller-provided seed.<br/>
         /// The same seed and keySize will always produce the same key material.
         /// </summary>
-        public RedXKey(byte keySize, ReadOnlySpan<byte> seed)
+        public ZifikaKey(byte keySize, ReadOnlySpan<byte> seed)
         {
             if (seed.Length < MinSeedLength)
                 throw new ArgumentException($"Seed must be at least {MinSeedLength} bytes", nameof(seed));
@@ -1133,7 +1133,7 @@ namespace RedxLib
             //if (keySize < 2)
             //    throw new ArgumentException("Key size must be at least 1", nameof(keySize));
             this.keyBlockSize = keySize;
-            using var keyData = new RedxBufferStream();
+            using var keyData = new ZifikaBufferStream();
             rkd = new byte[keySize][];
             var idx = (short)0;
             for (int i = 0; i < keySize; i++)
@@ -1204,11 +1204,11 @@ namespace RedxLib
         /// The derived key contains lookup tokens and nonces only; it cannot be used to encrypt or regenerate the permutation.
         /// </summary>
         //======  METHODS  ======
-        internal RedXVerifyingDecryptionKey CreateVerifyingDecryptionKey()
+        internal ZifikaVerifyingDecryptionKey CreateVerifyingDecryptionKey()
         {
             EnsureNotDisposed();
             // create an internal verifying decryption key from the full key
-            return new RedXVerifyingDecryptionKey(this);
+            return new ZifikaVerifyingDecryptionKey(this);
         }
 
         /// <summary>
@@ -1217,7 +1217,7 @@ namespace RedxLib
         /// This keeps the control stream decryptable by the verifier key without leaking the full permutation.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal RedxBufferStream MapData(RedXVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> data, short startLocation, Span<byte> intCat = default)
+        internal ZifikaBufferStream MapData(ZifikaVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> data, short startLocation, Span<byte> intCat = default)
         {
             EnsureNotDisposed();
             // normalize startLocation (treat as ushort for full range)
@@ -1236,7 +1236,7 @@ namespace RedxLib
             // under the verifier key without building large nonce tables.
             if (data.Length > 0 && data.Length <= CompactThreshold)
             {
-                var outBs = new RedxBufferStream();
+                var outBs = new ZifikaBufferStream();
                 outBs.WriteByte(CompactMarker);
                 // Derive keystream via Blake3 XOF(master=verifyingKey.keyHash, context=verifyingKeyLock)
                 var keystream = new byte[data.Length];
@@ -1253,7 +1253,7 @@ namespace RedxLib
             }
 
             // 1) core encrypt: build key-row offset stream + noncesOut[] + unique-nonce map
-            var cipher = new RedxBufferStream();
+            var cipher = new ZifikaBufferStream();
             ushort[] noncesOut = new ushort[data.Length];
 
             // track unique nonces and assign each a small byte‐index
@@ -1338,7 +1338,7 @@ namespace RedxLib
             }
 
             // 3) pick the winner and actually encode
-            var ret = new RedxBufferStream();
+            var ret = new ZifikaBufferStream();
             if (dictSize <= rleSize)
             {
                 // marker for dict
@@ -1407,7 +1407,7 @@ namespace RedxLib
         /// </summary>
         //------ Public Methods -----
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream MapData(ReadOnlySpan<byte> data, short startLocation, Span<byte> intCat = default)
+        public ZifikaBufferStream MapData(ReadOnlySpan<byte> data, short startLocation, Span<byte> intCat = default)
         {
             EnsureNotDisposed();
             // wrap startLocation (treat as ushort for full range)
@@ -1415,7 +1415,7 @@ namespace RedxLib
             var sRow = (start / 256) % keyBlockSize;
             var sCol = start % 256;
 
-            var output = new RedxBufferStream();
+            var output = new ZifikaBufferStream();
             var curRow = sRow;
             var curCol = sCol;
             var intCatLen = intCat.Length;
@@ -1466,14 +1466,14 @@ namespace RedxLib
         /// Checkpoints snapshot the observer state at fixed intervals and return it via <paramref name="checkpointStates32xN"/>.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream MapDataWithObserver(ReadOnlySpan<byte> data, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, Span<byte> checkpointStates32xN)
+        public ZifikaBufferStream MapDataWithObserver(ReadOnlySpan<byte> data, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, Span<byte> checkpointStates32xN)
         {
             EnsureNotDisposed();
             if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
             if (checkpointCount > 0)
             {
                 if (checkpointInterval <= 0) throw new ArgumentOutOfRangeException(nameof(checkpointInterval));
-                if (checkpointStates32xN.Length < checkpointCount * RedX.ObserverStateSize)
+                if (checkpointStates32xN.Length < checkpointCount * Zifika.ObserverStateSize)
                     throw new ArgumentException("checkpointStates32xN too small", nameof(checkpointStates32xN));
             }
 
@@ -1482,14 +1482,14 @@ namespace RedxLib
             var sRow = (start / 256) % keyBlockSize;
             var sCol = start % 256;
 
-            var output = new RedxBufferStream();
+            var output = new ZifikaBufferStream();
             var curRow = sRow;
             var curCol = sCol;
             int intCatLen = intCat.Length;
 
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
 
-            Span<byte> obsState = stackalloc byte[RedX.ObserverStateSize];
+            Span<byte> obsState = stackalloc byte[Zifika.ObserverStateSize];
             obsState.Clear();
             uint step = 0;
 
@@ -1536,7 +1536,7 @@ namespace RedxLib
                 // snapshot observer state at checkpoints (after processing this step)
                 if (checkpointCount > 0 && ((i + 1) % checkpointInterval) == 0 && ckWrite < checkpointCount)
                 {
-                    obsState.CopyTo(checkpointStates32xN.Slice(ckWrite * RedX.ObserverStateSize, RedX.ObserverStateSize));
+                    obsState.CopyTo(checkpointStates32xN.Slice(ckWrite * Zifika.ObserverStateSize, Zifika.ObserverStateSize));
                     ckWrite++;
                 }
             }
@@ -1544,7 +1544,7 @@ namespace RedxLib
             // ensure last checkpoint exists if checkpoints requested and none landed exactly on end
             if (checkpointCount > 0 && ckWrite < checkpointCount)
             {
-                obsState.CopyTo(checkpointStates32xN.Slice(ckWrite * RedX.ObserverStateSize, RedX.ObserverStateSize));
+                obsState.CopyTo(checkpointStates32xN.Slice(ckWrite * Zifika.ObserverStateSize, Zifika.ObserverStateSize));
             }
 
             output.Position = 0;
@@ -1588,14 +1588,14 @@ namespace RedxLib
         /// </param>
         /// <returns>Recovered plaintext.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream UnmapData(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat = default, int count = -1)
+        public ZifikaBufferStream UnmapData(ZifikaBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat = default, int count = -1)
         {
             EnsureNotDisposed();
             int start = ((ushort)startLocation) % (keyBlockSize * 256);
             var sRow = start / 256;
             var sCol = start % 256;
 
-            var output = new RedxBufferStream();
+            var output = new ZifikaBufferStream();
             var curRow = sRow;
             var curCol = sCol;
             var intCatLen = intCat.Length;
@@ -1634,16 +1634,16 @@ namespace RedxLib
         }
 
         /// <summary>
-        /// Convenience overload that accepts an in-memory key-row offset stream instead of RedxBufferStream.<br/>
+        /// Convenience overload that accepts an in-memory key-row offset stream instead of ZifikaBufferStream.<br/>
         /// Useful for tests or callers that already materialized the cipher bytes.
         /// </summary>
-        public RedxBufferStream UnmapData(Memory<byte> skipsSpan, short startLocation, ReadOnlySpan<byte> intCat = default, int count = -1)
+        public ZifikaBufferStream UnmapData(Memory<byte> skipsSpan, short startLocation, ReadOnlySpan<byte> intCat = default, int count = -1)
         {
-            return UnmapData(new RedxBufferStream(skipsSpan), startLocation, intCat, count);
+            return UnmapData(new ZifikaBufferStream(skipsSpan), startLocation, intCat, count);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream UnmapDataWithAuthority(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
+        public ZifikaBufferStream UnmapDataWithAuthority(ZifikaBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
         {
             EnsureNotDisposed();
             if (authorityPublicKey == null) throw new ArgumentNullException(nameof(authorityPublicKey));
@@ -1651,7 +1651,7 @@ namespace RedxLib
             if (checkpointCount > 0)
             {
                 if (checkpointInterval <= 0) throw new ArgumentOutOfRangeException(nameof(checkpointInterval));
-                if (sigs64xN.Length < checkpointCount * RedX.DefaultAuthoritySigSize)
+                if (sigs64xN.Length < checkpointCount * Zifika.DefaultAuthoritySigSize)
                     throw new ArgumentException("sigs64xN too small", nameof(sigs64xN));
                 if (rKeyId32.Length != 32) throw new ArgumentException("rKeyId32 must be 32 bytes", nameof(rKeyId32));
             }
@@ -1660,19 +1660,19 @@ namespace RedxLib
             var sRow = start / 256;
             var sCol = start % 256;
 
-            var output = new RedxBufferStream();
+            var output = new ZifikaBufferStream();
             var curRow = sRow;
             var curCol = sCol;
             int intCatLen = intCat.Length;
 
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
 
-            Span<byte> obsState = stackalloc byte[RedX.ObserverStateSize];
+            Span<byte> obsState = stackalloc byte[Zifika.ObserverStateSize];
             obsState.Clear();
             uint step = 0;
             int ckRead = 0;
 
-            Span<byte> msg = stackalloc byte[RedX.AuthorityDomainBytes.Length + 32 + 4 + RedX.ObserverStateSize];
+            Span<byte> msg = stackalloc byte[Zifika.AuthorityDomainBytes.Length + 32 + 4 + Zifika.ObserverStateSize];
 
             for (int i = 0; (count < 0 || i < count) && mapped.Position < mapped.Length; i++)
             {
@@ -1712,11 +1712,11 @@ namespace RedxLib
 
                 if (checkpointCount > 0 && ((i + 1) % checkpointInterval) == 0 && ckRead < checkpointCount)
                 {
-                    int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
-                    var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                    int msgLen = Zifika.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                    var sig = sigs64xN.Slice(ckRead * Zifika.DefaultAuthoritySigSize, Zifika.DefaultAuthoritySigSize);
                     if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                     {
-                        RedX.DebugMint("Full-key authority signature verify failed during checkpoints.");
+                        Zifika.DebugMint("Full-key authority signature verify failed during checkpoints.");
                         return null;
                     }
 
@@ -1727,11 +1727,11 @@ namespace RedxLib
             // if checkpoints were expected but not all verified, enforce final verification using last state
             if (checkpointCount > 0 && ckRead < checkpointCount)
             {
-                int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
-                var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                int msgLen = Zifika.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                var sig = sigs64xN.Slice(ckRead * Zifika.DefaultAuthoritySigSize, Zifika.DefaultAuthoritySigSize);
                 if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                 {
-                    RedX.DebugMint("Full-key authority signature verify failed at final checkpoint.");
+                    Zifika.DebugMint("Full-key authority signature verify failed at final checkpoint.");
                     return null;
                 }
             }
@@ -1798,7 +1798,7 @@ namespace RedxLib
         internal void EnsureNotDisposed()
         {
             if (_disposed)
-                throw new ObjectDisposedException(nameof(RedXKey));
+                throw new ObjectDisposedException(nameof(ZifikaKey));
         }
 
         /// <summary>
@@ -1837,17 +1837,17 @@ namespace RedxLib
     }
 
     /// <summary>
-    /// Minting composite key: holds the full RedX key and authority key pair used to mint signed ciphertexts.<br/>
+    /// Minting composite key: holds the full Zifika key and authority key pair used to mint signed ciphertexts.<br/>
     /// Provides serialization for distribution/storage and can derive a verifier key without requiring the caller to handle ECDSA directly.
     /// </summary>
-    public sealed class RedXMintingKey
+    public sealed class ZifikaMintingKey
     {
         /// <summary>
         /// Rehydrate a minting key from its serialized blob.<br/>
         /// Validates structural lengths and recomputes derived fields (key hash, inverse rows) from the stored key material.
         /// </summary>
         //Shared/Static Members
-        internal static RedXMintingKey FromBytes(ReadOnlySpan<byte> blob)
+        internal static ZifikaMintingKey FromBytes(ReadOnlySpan<byte> blob)
         {
             int off = 0;
             if (blob.Length < 1 + 1 + 4) throw new ArgumentException("Minting key blob too small", nameof(blob));
@@ -1870,14 +1870,14 @@ namespace RedxLib
             var authPub = blob.Slice(off, authPubLen).ToArray();
 
             var fullKey = RehydrateKey(keyBlockSize, keyBytes);
-            return new RedXMintingKey(fullKey, authPriv, authPub);
+            return new ZifikaMintingKey(fullKey, authPriv, authPub);
         }
-        private static RedXKey RehydrateKey(byte keyBlockSize, ReadOnlySpan<byte> keyBytes)
+        private static ZifikaKey RehydrateKey(byte keyBlockSize, ReadOnlySpan<byte> keyBytes)
         {
             if (keyBlockSize == 0) throw new ArgumentOutOfRangeException(nameof(keyBlockSize));
             if (keyBytes.Length != keyBlockSize * 256) throw new ArgumentException("Key bytes length does not match block size", nameof(keyBytes));
 
-            var key = RedXKey.RehydrateFromRawKeyBytes(keyBytes);
+            var key = ZifikaKey.RehydrateFromRawKeyBytes(keyBytes);
             if (key.keyBlockSize != keyBlockSize)
                 throw new InvalidOperationException("Minting key block size mismatch");
             return key;
@@ -1901,7 +1901,7 @@ namespace RedxLib
 
 
         //======  CONSTRUCTORS  ======
-        internal RedXMintingKey(RedXKey fullKey, byte[] authorityPrivateKeyPkcs8, byte[] authorityPublicKeySpki)
+        internal ZifikaMintingKey(ZifikaKey fullKey, byte[] authorityPrivateKeyPkcs8, byte[] authorityPublicKeySpki)
         {
             FullKey = fullKey ?? throw new ArgumentNullException(nameof(fullKey));
             AuthorityPrivateKeyPkcs8 = authorityPrivateKeyPkcs8 ?? throw new ArgumentNullException(nameof(authorityPrivateKeyPkcs8));
@@ -1918,7 +1918,7 @@ namespace RedxLib
         //======  PROPERTIES  ======
         internal byte[] AuthorityPrivateKeyPkcs8 { get; }
         internal byte[] AuthorityPublicKeySpki { get; }
-        internal RedXKey FullKey { get; }
+        internal ZifikaKey FullKey { get; }
         /// <summary>
         /// Authority public key (SPKI) paired with the private key.<br/>
         /// Used by verifiers to validate checkpoints.
@@ -1928,7 +1928,7 @@ namespace RedxLib
         /// Exposes the full key for callers that still need symmetric operations.<br/>
         /// Provided as a read-only view to minimize accidental mutation.
         /// </summary>
-        public RedXKey Key => FullKey;
+        public ZifikaKey Key => FullKey;
 
 
 
@@ -1943,10 +1943,10 @@ namespace RedxLib
         /// </summary>
         //------ Public Methods -----
         //======  METHODS  ======
-        public RedXVerifierKey CreateVerifierKey()
+        public ZifikaVerifierKey CreateVerifierKey()
         {
             var verifyingKey = FullKey.CreateVerifyingDecryptionKey();
-            return new RedXVerifierKey(verifyingKey, AuthorityPublicKeySpki);
+            return new ZifikaVerifierKey(verifyingKey, AuthorityPublicKeySpki);
         }
 
         /// <summary>
@@ -1979,14 +1979,14 @@ namespace RedxLib
     /// Verifier composite key: holds the verifier key and authority public key required to decrypt and verify checkpoints.<br/>
     /// Does not include minting material or authority private key.
     /// </summary>
-    public sealed class RedXVerifierKey
+    public sealed class ZifikaVerifierKey
     {
         /// <summary>
         /// Rehydrate a verifier key from its serialized blob.<br/>
         /// Ensures structural integrity before constructing the verifier key and public key.
         /// </summary>
         //Shared/Static Members
-        internal static RedXVerifierKey FromBytes(ReadOnlySpan<byte> blob)
+        internal static ZifikaVerifierKey FromBytes(ReadOnlySpan<byte> blob)
         {
             int off = 0;
             if (blob.Length < 1 + 4) throw new ArgumentException("Verifier key blob too small", nameof(blob));
@@ -1999,8 +1999,8 @@ namespace RedxLib
             if (authPubLen < 1 || blob.Length < off + authPubLen) throw new InvalidOperationException("Invalid authority public length");
             var authPub = blob.Slice(off, authPubLen).ToArray();
 
-            var verifyingKey = new RedXVerifyingDecryptionKey(verifierBlob);
-            return new RedXVerifierKey(verifyingKey, authPub);
+            var verifyingKey = new ZifikaVerifyingDecryptionKey(verifierBlob);
+            return new ZifikaVerifierKey(verifyingKey, authPub);
         }
 
 
@@ -2021,7 +2021,7 @@ namespace RedxLib
 
 
         //======  CONSTRUCTORS  ======
-        internal RedXVerifierKey(RedXVerifyingDecryptionKey verifyingKey, byte[] authorityPublicKeySpki)
+        internal ZifikaVerifierKey(ZifikaVerifyingDecryptionKey verifyingKey, byte[] authorityPublicKeySpki)
         {
             VerifyingKey = verifyingKey ?? throw new ArgumentNullException(nameof(verifyingKey));
             AuthorityPublicKeySpki = authorityPublicKeySpki ?? throw new ArgumentNullException(nameof(authorityPublicKeySpki));
@@ -2040,8 +2040,8 @@ namespace RedxLib
         /// Exposes the verifier key for decryption use.<br/>
         /// Provided as a read-only property to avoid accidental replacement.
         /// </summary>
-        internal RedXVerifyingDecryptionKey Key => VerifyingKey;
-        internal RedXVerifyingDecryptionKey VerifyingKey { get; }
+        internal ZifikaVerifyingDecryptionKey Key => VerifyingKey;
+        internal ZifikaVerifyingDecryptionKey VerifyingKey { get; }
         /// <summary>
         /// Authority public key (SPKI) used to verify checkpoints.<br/>
         /// Return type is ReadOnlyMemory to discourage mutation.
@@ -2081,10 +2081,10 @@ namespace RedxLib
     /// <summary>
     /// Verifying decryption key used for verify/mint decryption and authority verification.<br/>
     /// Contains the master key hash, per-position nonces, and a blinded map from lookup tokens to plaintext bytes.<br/>
-    /// Does not retain a copy of the original RedX key bytes after construction.<br/>
+    /// Does not retain a copy of the original Zifika key bytes after construction.<br/>
     /// This runtime-only type performs lookups to recover plaintext and verify checkpoints; it is internal implementation detail.<br/>
     /// </summary>
-    internal sealed class RedXVerifyingDecryptionKey
+    internal sealed class ZifikaVerifyingDecryptionKey
     {
         //Shared/Static Members
         private static void DeriveNoncesAndMap(ReadOnlySpan<byte> seed, ReadOnlySpan<byte> keyBytes, ReadOnlySpan<byte> keyHash, Span<ushort> nonceDest, Dictionary<uint, byte> map, int keyBlockSize)
@@ -2103,7 +2103,7 @@ namespace RedxLib
                 h.Finalize(out16);
                 ushort nonce = MemoryMarshal.Read<ushort>(out16);
                 nonceDest[i] = nonce;
-                uint h32 = RedX.ComputeH32(keyHash, i, nonce);
+                uint h32 = Zifika.ComputeH32(keyHash, i, nonce);
                 map[h32] = keyBytes[i];
             }
         }
@@ -2155,7 +2155,7 @@ namespace RedxLib
         /// This preserves the mint/verify behavior while removing chameleon-hash dependency and making lookups reproducible.
         /// </summary>
         //======  CONSTRUCTORS  ======
-        public RedXVerifyingDecryptionKey(RedXKey key)
+        public ZifikaVerifyingDecryptionKey(ZifikaKey key)
         {
             keyLength = key.keyLength;
             keyBlockSize = key.keyBlockSize;
@@ -2181,7 +2181,7 @@ namespace RedxLib
         /// Rehydrate directly from the ToBytes() blob.<br/>
         /// This constructor trusts the blob and performs minimal validation; callers should ensure authenticity before passing it in.
         /// </summary>
-        public RedXVerifyingDecryptionKey(ReadOnlySpan<byte> blob)
+        public ZifikaVerifyingDecryptionKey(ReadOnlySpan<byte> blob)
         {
             int off = 0;
             if (blob.Length < 1 + 4 + 1 + 1)
@@ -2241,7 +2241,7 @@ namespace RedxLib
             var ns = nonces.Span;
             for (int i = 0; i < keyLength; i++)
             {
-                uint h32 = RedX.ComputeH32(keyHash.Span, i, ns[i]);
+                uint h32 = Zifika.ComputeH32(keyHash.Span, i, ns[i]);
                 keyBytes[i] = chMap[h32];
             }
 
@@ -2267,10 +2267,10 @@ namespace RedxLib
         /// <summary>
         /// Replay a key-row offset stream into plaintext using the verifier key.
         /// Supports compact or header-based nonce encodings for small control streams, and interference catalyst mixing to resist replay.<br/>
-        /// Returns a new RedxBufferStream positioned at 0 or null on header rejection when rejectCompactHeader is true.
+        /// Returns a new ZifikaBufferStream positioned at 0 or null on header rejection when rejectCompactHeader is true.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream UnmapData(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> intCat = default, int count = -1, bool rejectCompactHeader = false)
+        public ZifikaBufferStream UnmapData(ZifikaBufferStream mapped, short startLocation, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> intCat = default, int count = -1, bool rejectCompactHeader = false)
         {
             // keyLength is keyBlockSize * 256
             int start = ((ushort)startLocation) % this.keyLength;
@@ -2279,7 +2279,7 @@ namespace RedxLib
             int intCatLen = intCat.Length;
             int blockSz = keyBlockSize;
 
-            var output = new RedxBufferStream();
+            var output = new ZifikaBufferStream();
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
             var streamLength = mapped.Length;
             var streamPos = mapped.Position;
@@ -2301,7 +2301,7 @@ namespace RedxLib
                         // compact mode: remaining "count" bytes are the XOR'd payload
                         var buf = new byte[count];
                         for (int i = 0; i < count; i++) buf[i] = (byte)mapped.ReadByte();
-                        // derive keystream and unmask into a RedxBufferStream to return
+                        // derive keystream and unmask into a ZifikaBufferStream to return
                         var ks = new byte[count];
                         using (var xof = new Blake3XofReader(keyHash.Span, verifyingKeyLock))
                         {
@@ -2309,7 +2309,7 @@ namespace RedxLib
                         }
                         var outBuf = new byte[count];
                         for (int i = 0; i < count; i++) outBuf[i] = (byte)(buf[i] ^ ks[i]);
-                        return new RedxBufferStream(outBuf);
+                        return new ZifikaBufferStream(outBuf);
                     }
                     if (marker == 0x01)
                     {
@@ -2409,14 +2409,14 @@ namespace RedxLib
         /// Returns null on signature failure to avoid emitting unverified plaintext.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public RedxBufferStream UnmapDataWithAuthority(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
+        public ZifikaBufferStream UnmapDataWithAuthority(ZifikaBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, int count = -1)
         {
             if (authorityPublicKey == null) throw new ArgumentNullException(nameof(authorityPublicKey));
             if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
             if (checkpointCount > 0)
             {
                 if (checkpointInterval <= 0) throw new ArgumentOutOfRangeException(nameof(checkpointInterval));
-                if (sigs64xN.Length < checkpointCount * RedX.DefaultAuthoritySigSize)
+                if (sigs64xN.Length < checkpointCount * Zifika.DefaultAuthoritySigSize)
                     throw new ArgumentException("sigs64xN too small", nameof(sigs64xN));
                 if (rKeyId32.Length != 32) throw new ArgumentException("rKeyId32 must be 32 bytes", nameof(rKeyId32));
             }
@@ -2427,13 +2427,13 @@ namespace RedxLib
             int intCatLen = intCat.Length;
 
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
-            Span<byte> obsState = stackalloc byte[RedX.ObserverStateSize];
+            Span<byte> obsState = stackalloc byte[Zifika.ObserverStateSize];
             obsState.Clear();
             uint step = 0;
             int ckRead = 0;
 
-            Span<byte> msg = stackalloc byte[RedX.AuthorityDomainBytes.Length + 32 + 4 + RedX.ObserverStateSize];
-            var output = new RedxBufferStream();
+            Span<byte> msg = stackalloc byte[Zifika.AuthorityDomainBytes.Length + 32 + 4 + Zifika.ObserverStateSize];
+            var output = new ZifikaBufferStream();
             BuildBaseKeyBytesAndRkd(out var keyBytes, out var rkdFlat);
             ReshuffleKeyBytesAndRkdInPlace(keyBytes, rkdFlat, intCat);
 
@@ -2481,11 +2481,11 @@ namespace RedxLib
 
                     if (checkpointCount > 0 && ((i + 1) % checkpointInterval) == 0 && ckRead < checkpointCount)
                     {
-                        int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
-                        var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                        int msgLen = Zifika.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                        var sig = sigs64xN.Slice(ckRead * Zifika.DefaultAuthoritySigSize, Zifika.DefaultAuthoritySigSize);
                         if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                         {
-                            RedX.DebugMint($"verifier authority signature verify failed at checkpoint {ckRead}.");
+                            Zifika.DebugMint($"verifier authority signature verify failed at checkpoint {ckRead}.");
                             return null;
                         }
                         ckRead++;
@@ -2494,11 +2494,11 @@ namespace RedxLib
 
                 if (checkpointCount > 0 && ckRead < checkpointCount)
                 {
-                    int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
-                    var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                    int msgLen = Zifika.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                    var sig = sigs64xN.Slice(ckRead * Zifika.DefaultAuthoritySigSize, Zifika.DefaultAuthoritySigSize);
                     if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                     {
-                        RedX.DebugMint("verifier authority signature verify failed at final checkpoint.");
+                        Zifika.DebugMint("verifier authority signature verify failed at final checkpoint.");
                         return null;
                     }
                 }
@@ -2524,7 +2524,7 @@ namespace RedxLib
         /// <param name="count">Explicit byte count to read, or -1 to read to end.<br/></param>
         /// <param name="rejectCompactHeader">Reject compact header marker when true.<br/></param>
         /// <param name="rkdFlat">Inverse rows for distance decoding (row-major).<br/></param>
-        internal RedxBufferStream UnmapDataWithRkd(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> intCat, int count, bool rejectCompactHeader, ReadOnlySpan<byte> rkdFlat)
+        internal ZifikaBufferStream UnmapDataWithRkd(ZifikaBufferStream mapped, short startLocation, ReadOnlySpan<byte> verifyingKeyLock, ReadOnlySpan<byte> intCat, int count, bool rejectCompactHeader, ReadOnlySpan<byte> rkdFlat)
         {
             int start = ((ushort)startLocation) % this.keyLength;
             int curRow = start / 256;
@@ -2532,7 +2532,7 @@ namespace RedxLib
             int intCatLen = intCat.Length;
             int blockSz = keyBlockSize;
 
-            var output = new RedxBufferStream();
+            var output = new ZifikaBufferStream();
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
             var noncesSpan = nonces.Span;
             var map = chMap;
@@ -2559,7 +2559,7 @@ namespace RedxLib
                         }
                         var outBuf = new byte[count];
                         for (int i = 0; i < count; i++) outBuf[i] = (byte)(buf[i] ^ ks[i]);
-                        return new RedxBufferStream(outBuf);
+                        return new ZifikaBufferStream(outBuf);
                     }
                     if (marker == 0x01)
                     {
@@ -2623,7 +2623,7 @@ namespace RedxLib
                 int flatIndex = curRow * 256 + newCol;
 
                 ushort r = perPositionNonces != null && i < perPositionNonces.Length ? perPositionNonces[i] : noncesSpan[flatIndex];
-                uint h32 = RedX.ComputeH32(keyHash.Span, flatIndex, r);
+                uint h32 = Zifika.ComputeH32(keyHash.Span, flatIndex, r);
                 if (!map.TryGetValue(h32, out byte plain))
                     throw new CryptographicException($"verifier lookup failed at index {flatIndex}");
 
@@ -2654,14 +2654,14 @@ namespace RedxLib
         /// <param name="keyBytes">Reshuffled key bytes (row-major) used for landing bytes.<br/></param>
         /// <param name="rkdFlat">Inverse rows for distance decoding (row-major).<br/></param>
         /// <param name="count">Explicit byte count to read, or -1 to read to end.<br/></param>
-        internal RedxBufferStream UnmapDataWithAuthorityWithRkd(RedxBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, ReadOnlySpan<byte> keyBytes, ReadOnlySpan<byte> rkdFlat, int count = -1)
+        internal ZifikaBufferStream UnmapDataWithAuthorityWithRkd(ZifikaBufferStream mapped, short startLocation, ReadOnlySpan<byte> intCat, int checkpointInterval, int checkpointCount, ReadOnlySpan<byte> sigs64xN, ECDsa authorityPublicKey, ReadOnlySpan<byte> rKeyId32, ReadOnlySpan<byte> keyBytes, ReadOnlySpan<byte> rkdFlat, int count = -1)
         {
             if (authorityPublicKey == null) throw new ArgumentNullException(nameof(authorityPublicKey));
             if (checkpointCount < 0) throw new ArgumentOutOfRangeException(nameof(checkpointCount));
             if (checkpointCount > 0)
             {
                 if (checkpointInterval <= 0) throw new ArgumentOutOfRangeException(nameof(checkpointInterval));
-                if (sigs64xN.Length < checkpointCount * RedX.DefaultAuthoritySigSize)
+                if (sigs64xN.Length < checkpointCount * Zifika.DefaultAuthoritySigSize)
                     throw new ArgumentException("sigs64xN too small", nameof(sigs64xN));
                 if (rKeyId32.Length != 32) throw new ArgumentException("rKeyId32 must be 32 bytes", nameof(rKeyId32));
             }
@@ -2672,13 +2672,13 @@ namespace RedxLib
             int intCatLen = intCat.Length;
 
             var bx = new JumpGenerator(keyHash.Span, 1, intCat);
-            Span<byte> obsState = stackalloc byte[RedX.ObserverStateSize];
+            Span<byte> obsState = stackalloc byte[Zifika.ObserverStateSize];
             obsState.Clear();
             uint step = 0;
             int ckRead = 0;
 
-            Span<byte> msg = stackalloc byte[RedX.AuthorityDomainBytes.Length + 32 + 4 + RedX.ObserverStateSize];
-            var output = new RedxBufferStream();
+            Span<byte> msg = stackalloc byte[Zifika.AuthorityDomainBytes.Length + 32 + 4 + Zifika.ObserverStateSize];
+            var output = new ZifikaBufferStream();
 
             for (int i = 0; (count < 0 || i < count) && mapped.Position < mapped.Length; i++)
             {
@@ -2720,11 +2720,11 @@ namespace RedxLib
 
                 if (checkpointCount > 0 && ((i + 1) % checkpointInterval) == 0 && ckRead < checkpointCount)
                 {
-                    int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
-                    var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                    int msgLen = Zifika.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                    var sig = sigs64xN.Slice(ckRead * Zifika.DefaultAuthoritySigSize, Zifika.DefaultAuthoritySigSize);
                     if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                     {
-                        RedX.DebugMint($"verifier authority signature verify failed at checkpoint {ckRead}.");
+                        Zifika.DebugMint($"verifier authority signature verify failed at checkpoint {ckRead}.");
                         return null;
                     }
                     ckRead++;
@@ -2733,11 +2733,11 @@ namespace RedxLib
 
             if (checkpointCount > 0 && ckRead < checkpointCount)
             {
-                int msgLen = RedX.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
-                var sig = sigs64xN.Slice(ckRead * RedX.DefaultAuthoritySigSize, RedX.DefaultAuthoritySigSize);
+                int msgLen = Zifika.BuildAuthorityMessage(rKeyId32, ckRead, obsState, msg);
+                var sig = sigs64xN.Slice(ckRead * Zifika.DefaultAuthoritySigSize, Zifika.DefaultAuthoritySigSize);
                 if (!authorityPublicKey.VerifyData(msg.Slice(0, msgLen), sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                 {
-                    RedX.DebugMint("verifier authority signature verify failed at final checkpoint.");
+                    Zifika.DebugMint("verifier authority signature verify failed at final checkpoint.");
                     return null;
                 }
             }
@@ -2761,7 +2761,7 @@ namespace RedxLib
             var map = chMap;
             for (int i = 0; i < keyLength; i++)
             {
-                uint h32 = RedX.ComputeH32(keyHash.Span, i, ns[i]);
+                uint h32 = Zifika.ComputeH32(keyHash.Span, i, ns[i]);
                 if (!map.TryGetValue(h32, out byte value))
                     throw new CryptographicException($"verifier lookup failed while rebuilding key at index {i}");
                 keyBytes[i] = value;
@@ -2801,7 +2801,7 @@ namespace RedxLib
         {
             int rows = keyBytes.Length / 256;
             Span<byte> seed = stackalloc byte[32];
-            using (var seedXof = new Blake3XofReader(RedXKey.ReshuffleDomainBytes, intCat))
+            using (var seedXof = new Blake3XofReader(ZifikaKey.ReshuffleDomainBytes, intCat))
             {
                 seedXof.ReadNext(seed);
             }
@@ -2810,7 +2810,7 @@ namespace RedxLib
             {
                 int rowBase = row * 256;
                 var rowSpan = keyBytes.Slice(rowBase, 256);
-                using (var rowXof = new Blake3XofReader(RedXKey.ReshuffleDomainBytes, seed))
+                using (var rowXof = new Blake3XofReader(ZifikaKey.ReshuffleDomainBytes, seed))
                 {
                     ShuffleDeterministicRow(rowSpan, rowXof);
                 }
@@ -2822,7 +2822,7 @@ namespace RedxLib
 
                 if (row + 1 < rows)
                 {
-                    using var nextSeedXof = new Blake3XofReader(RedXKey.ReshuffleDomainBytes, seed);
+                    using var nextSeedXof = new Blake3XofReader(ZifikaKey.ReshuffleDomainBytes, seed);
                     nextSeedXof.ReadNext(seed);
                 }
             }

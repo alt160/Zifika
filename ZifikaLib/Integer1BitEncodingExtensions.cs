@@ -2,7 +2,7 @@ using System;
 using System.Security.Cryptography;
 using System.IO;
 
-namespace RedxLib
+namespace ZifikaLib
 {
     /// <summary>
     /// 1-bit varint encoding/decoding helpers for core integer types.<br/>

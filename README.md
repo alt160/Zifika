@@ -1,10 +1,10 @@
-# RedX
+# Zifika
 
-RedX is an experimental cryptographic, deterministic, keyed **path‑walking** cipher.
+Zifika is an experimental cryptographic, deterministic, keyed **path‑walking** cipher.
 
 It walks a keyed 2D permutation grid, using a Blake3‑driven jump stream to move the cursor, and emits a **row‑encoded action stream** as ciphertext. Decryption replays the same walk to recover plaintext.
 
-RedX ships in two modes:
+Zifika ships in two modes:
 
 - **Symmetric mode**: full‑key encrypt and decrypt.
 - **Mint and Verify mode**: an origin‑locked mode where a **minting key** produces ciphertext and a **verifier key** can decrypt and verify provenance, while the verifier key is intentionally unable to mint ciphertext that passes verification.
@@ -38,7 +38,7 @@ A Blake3‑derived generator emits 16‑bit jumps (`NextJump16`).
 
 For each plaintext byte, the walker:
 
-1. Applies a jump to move `(row, col)` within the active RedX key.
+1. Applies a jump to move `(row, col)` within the active Zifika key.
 2. Finds the column where the current plaintext byte appears in that row.
 3. Computes the **forward wrapped distance** from the current column to that target column.
 4. **Encodes that distance through the current key row** and emits the resulting value as the ciphertext byte.
@@ -85,19 +85,19 @@ A per‑message byte array called the **interference catalyst** (`intCat`) is a 
 - Encrypt side: `plain = (plain + i + intCat[i % intCatLen]) mod 256`
 - Decrypt side: `plain = (plain - i - intCat[i % intCatLen]) mod 256`
 
-`intCat` has several distinct roles in RedX:
+`intCat` has several distinct roles in Zifika:
 
 1. **Ciphertext length variability**: it introduces a variable‑length header contribution so ciphertext length is not equal to plaintext length.
 2. **Per‑message walk diversification**: it is fed into the jump generator, causing the path‑walk to differ per message even under the same key.
 3. **Index‑dependent payload mixing**: it perturbs each payload byte by its position `i` and the catalyst byte, so the same plaintext value at different positions maps differently.
 4. **Payload boundary obscuring**: because `intCatLen` varies and the catalyst bytes are present early in the encrypted header, it becomes harder to infer where the payload begins from structure alone.
-5. **Per‑message key reshaping**: `intCat` is used to reshuffle the base RedX key (via Fisher–Yates) before payload processing, producing a message‑specific ephemeral key that is not reused across encryptions.
+5. **Per‑message key reshaping**: `intCat` is used to reshuffle the base Zifika key (via Fisher–Yates) before payload processing, producing a message‑specific ephemeral key that is not reused across encryptions.
 
 `intCat` is also included in the optional integrity seal computation.
 
 ## Integrity seal
 
-When enabled, RedX appends an encrypted integrity seal to the ciphertext.
+When enabled, Zifika appends an encrypted integrity seal to the ciphertext.
 
 - Seal length: **32 bytes (256 bits)** in the current implementation.
 - Seal material: `integritySeal32B = Blake3(rowEncodedStream || intCat)`.
@@ -109,20 +109,20 @@ This provides tamper and corruption detection with a fail‑closed decryption be
 
 ## Key Types
 
-### `RedXKey`
+### `ZifikaKey`
 
 Full key used for symmetric mode and for deriving verifier keys.
 
 - Holds the permutation rows (`keyBytes`), inverse rows (`rkd`), and a 64‑byte Blake3 digest of the key bytes (`keyHash`).
 
-### `RedXMintingKey`
+### `ZifikaMintingKey`
 
 Minting composite key.
 
-- Contains a `RedXKey` plus an **authority** ECDSA P‑256 keypair (private PKCS#8 + public SPKI).
+- Contains a `ZifikaKey` plus an **authority** ECDSA P‑256 keypair (private PKCS#8 + public SPKI).
 - Can mint signed ciphertext and derive a verifier key.
 
-### `RedXVerifierKey`
+### `ZifikaVerifierKey`
 
 Verifier composite key.
 
@@ -148,14 +148,14 @@ This supports decryption by lookup without exposing the full permutation.
 ### Symmetric encrypt and decrypt
 
 ```csharp
-using RedxLib;
+using ZifikaLib;
 using System.Text;
 
-var key = RedX.CreateKey();
+var key = Zifika.CreateKey();
 var plaintext = Encoding.UTF8.GetBytes("hello");
 
-using var cipher = RedX.Encrypt(plaintext, key);
-using var recovered = RedX.Decrypt(cipher, key);
+using var cipher = Zifika.Encrypt(plaintext, key);
+using var recovered = Zifika.Decrypt(cipher, key);
 
 var text = Encoding.UTF8.GetString(recovered.AsReadOnlySpan);
 ```
@@ -163,14 +163,14 @@ var text = Encoding.UTF8.GetString(recovered.AsReadOnlySpan);
 ### Mint and Verify encrypt then verify and decrypt
 
 ```csharp
-using RedxLib;
+using ZifikaLib;
 using System.Text;
 
-var (minting, verifier) = RedX.CreateMintingKeyPair();
+var (minting, verifier) = Zifika.CreateMintingKeyPair();
 var data = Encoding.UTF8.GetBytes("hello");
 
-using var cipher = RedX.Mint(data, minting);
-using var recovered = RedX.VerifyAndDecrypt(cipher, verifier);
+using var cipher = Zifika.Mint(data, minting);
+using var recovered = Zifika.VerifyAndDecrypt(cipher, verifier);
 
 var text = Encoding.UTF8.GetString(recovered.AsReadOnlySpan);
 ```
@@ -187,7 +187,7 @@ Symmetric ciphertext is:
 - `rowOffsetStream`
 - optional: `enc(integritySeal32B)`
 
-Where `enc(...)` means RedX mapping using the full key.
+Where `enc(...)` means Zifika mapping using the full key.
 
 Integrity seal, when enabled:
 
@@ -218,7 +218,7 @@ Notes:
 
 Mint and Verify binds provenance by signing a 32-byte **observer state** at one or more checkpoints.
 
-- For payloads up to 4 KiB, RedX uses a single accumulator signature.
+- For payloads up to 4 KiB, Zifika uses a single accumulator signature.
 - For larger payloads, it computes a checkpoint plan capped by `maxCheckpoints`.
 
 Verification recomputes observer state while replaying the ciphertext walk and requires all signatures to verify before returning plaintext.
@@ -231,7 +231,7 @@ Given:
 - identical `startLocation`
 - identical `intCat`
 
-RedX produces identical ciphertext.
+Zifika produces identical ciphertext.
 
 Although the payload key is reshuffled per message, the reshuffle is fully determined by `intCat`; therefore determinism still holds when `startLocation` and `intCat` are identical.
 
@@ -239,7 +239,7 @@ In normal use, `startLocation` and `intCat` are randomized per message, which ma
 
 ## What to review
 
-If you are reviewing RedX, these are the questions that matter:
+If you are reviewing Zifika, these are the questions that matter:
 
 - Are there practical distinguishers enabled by the distance stream representation
 - Does the jump replay create exploitable structure across positions
@@ -249,7 +249,7 @@ If you are reviewing RedX, these are the questions that matter:
 
 ## Non claims
 
-RedX does not claim:
+Zifika does not claim:
 
 - to be a proven secure cipher
 - to replace standardized ciphers

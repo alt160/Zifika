@@ -4,12 +4,12 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace RedxLib
+namespace ZifikaLib
 {
     /// <summary>
-    /// Lightweight in-memory stream optimized for RedX workloads.
+    /// Lightweight in-memory stream optimized for Zifika workloads.
     /// </summary>
-    public sealed class RedxBufferStream : Stream
+    public sealed class ZifikaBufferStream : Stream
     {
         private Memory<byte> _buffer;
         private byte[] _bufferBytes;
@@ -19,10 +19,10 @@ namespace RedxLib
         private bool _resizable;
 
         /// <summary>
-        /// Initializes a new instance of <see cref="RedxBufferStream"/> with the specified initial capacity.
+        /// Initializes a new instance of <see cref="ZifikaBufferStream"/> with the specified initial capacity.
         /// </summary>
         /// <param name="initialCapacity">The initial size of the underlying buffer in bytes.</param>
-        public RedxBufferStream(int initialCapacity = 4096)
+        public ZifikaBufferStream(int initialCapacity = 4096)
         {
             if (initialCapacity <= 0)
                 throw new ArgumentOutOfRangeException(nameof(initialCapacity), "Initial capacity must be positive.");
@@ -36,10 +36,10 @@ namespace RedxLib
         }
 
         /// <summary>
-        /// Initializes a new instance of <see cref="RedxBufferStream"/> over an existing buffer.
+        /// Initializes a new instance of <see cref="ZifikaBufferStream"/> over an existing buffer.
         /// </summary>
         /// <param name="existingBuffer">The backing buffer.</param>
-        public RedxBufferStream(byte[] existingBuffer)
+        public ZifikaBufferStream(byte[] existingBuffer)
         {
             ArgumentNullException.ThrowIfNull(existingBuffer);
 
@@ -51,10 +51,10 @@ namespace RedxLib
         }
 
         /// <summary>
-        /// Initializes a new instance of <see cref="RedxBufferStream"/> over an existing memory buffer.
+        /// Initializes a new instance of <see cref="ZifikaBufferStream"/> over an existing memory buffer.
         /// </summary>
         /// <param name="existingBuffer">The backing memory buffer.</param>
-        public RedxBufferStream(Memory<byte> existingBuffer)
+        public ZifikaBufferStream(Memory<byte> existingBuffer)
         {
             _buffer = existingBuffer;
             _length = existingBuffer.Length;
@@ -218,7 +218,7 @@ namespace RedxLib
         /// Writes all bytes from another buffer stream into this instance.
         /// </summary>
         /// <param name="buffer">The source buffer stream.</param>
-        public void Write(RedxBufferStream buffer)
+        public void Write(ZifikaBufferStream buffer)
         {
             ArgumentNullException.ThrowIfNull(buffer);
             WriteBytes(buffer.AsReadOnlySpan);
@@ -283,7 +283,7 @@ namespace RedxLib
         private void EnsureNotDisposed()
         {
             if (_disposed)
-                throw new ObjectDisposedException(nameof(RedxBufferStream));
+                throw new ObjectDisposedException(nameof(ZifikaBufferStream));
         }
 
         private T ReadPrimitive<T>() where T : unmanaged

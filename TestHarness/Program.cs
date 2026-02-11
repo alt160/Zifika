@@ -1,11 +1,11 @@
-using RedxLib;
+using ZifikaLib;
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using TextCopy;
-// use RedxLib.RedX directly
+// use ZifikaLib.Zifika directly
 
 void WriteLineColor(ConsoleColor color, string text)
 {
@@ -30,7 +30,7 @@ void WriteColorInline(ConsoleColor color, string text)
 /// <summary>
 /// Write a line that may contain glossary term markup in the form [[Term]].<br/>
 /// Terms are rendered in cyan while the rest of the line is plain text.<br/>
-/// The token [[RedX]] is rendered as plain text without colorization.<br/>
+/// The token [[Zifika]] is rendered as plain text without colorization.<br/>
 /// </summary>
 void WriteInfoLine(string line)
 {
@@ -54,7 +54,7 @@ void WriteInfoLine(string line)
         }
         Console.Write(line.Substring(idx, start - idx));
         var term = line.Substring(start + TermStart.Length, end - (start + TermStart.Length));
-        if (string.Equals(term, "RedX", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(term, "Zifika", StringComparison.OrdinalIgnoreCase))
             Console.Write(term);
         else
             WriteColorInline(ConsoleColor.Cyan, term);
@@ -118,10 +118,10 @@ const string GlossaryContextMintVerify = "mint-verify";
 const string GlossaryContextSymmetricKey = "symmetric-key";
 const string GlossaryContextMintVerifyKey = "mint-verify-key";
 
-const string GlossaryPrimerSource = @"[[RedX]] Primer
+const string GlossaryPrimerSource = @"[[Zifika]] Primer
 
   [[Overview]]
-    [[RedX]] is a symmetric cipher construction based
+    [[Zifika]] is a symmetric cipher construction based
     on deterministic [[Traversal]] over a two-
     dimensional permutation grid. [[Cipherbytes]]
     are the result of relative traversal distances rather than
@@ -144,13 +144,13 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
 
     [[Traversal]]
       [[Traversal]] is the deterministic process of
-      advancing through the [[RedXKey]] grid using
+      advancing through the [[ZifikaKey]] grid using
       jump values, landing positions, and offset
       emission.
 
     [[JumpStream]]
       The [[JumpStream]] is a deterministic sequence
-      of jump values derived from [[RedXKey]] and
+      of jump values derived from [[ZifikaKey]] and
       per-execution inputs. Jump values are
       independent of [[Plainbytes]].
 
@@ -182,7 +182,7 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
   [[Input And Plainbytes]]
 
     [[Input]]
-      [[Input]] to [[RedX]] is an ordered sequence of
+      [[Input]] to [[Zifika]] is an ordered sequence of
       bytes. Any byte that participates in traversal
       is a [[Plainbyte]].
 
@@ -207,18 +207,18 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
 
   [[Keys]]
 
-    [[RedXKey]]
+    [[ZifikaKey]]
 
       [[WhatItIs]]
 
         [[SerializedForm]]
-          A [[RedXKey]] is represented as a two-
+          A [[ZifikaKey]] is represented as a two-
           dimensional grid of bytes. Each row is
           exactly 256 bytes wide and is a permutation
           of values 0–255.
 
         [[ExecutionForm]]
-          In execution form, a [[RedXKey]] exists as
+          In execution form, a [[ZifikaKey]] exists as
           traversal-defining state. It deterministically
           defines jump generation, landing behavior,
           and offset emission.
@@ -226,13 +226,13 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
       [[WhatItIsNot]]
 
         [[SerializedForm]]
-          A [[RedXKey]] is not a number, scalar, or
+          A [[ZifikaKey]] is not a number, scalar, or
           algebraic structure. It does not encode
           block structure or plaintext-dependent
           state.
 
         [[ExecutionForm]]
-          A [[RedXKey]] is not a reversible transform,
+          A [[ZifikaKey]] is not a reversible transform,
           block cipher state, or stream cipher seed.
 
     [[MintingKey]]
@@ -241,7 +241,7 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
 
         [[SerializedForm]]
           A [[MintingKey]] is a composite key artifact
-          containing complete [[RedXKey]] base data
+          containing complete [[ZifikaKey]] base data
           and minting authority material.
 
         [[ExecutionForm]]
@@ -266,7 +266,7 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
 
         [[SerializedForm]]
           A [[VerifierKey]] is a composite, secret key
-          artifact containing [[RedXKey]] base data
+          artifact containing [[ZifikaKey]] base data
           and verification-only authority material.
 
         [[ExecutionForm]]
@@ -311,7 +311,7 @@ const string GlossaryPrimerSource = @"[[RedX]] Primer
   [[ClaimsAndNonClaims]]
 
     [[Claims]]
-      This document defines [[RedX]] mechanics,
+      This document defines [[Zifika]] mechanics,
       invariants, and nomenclature. All claims are
       intended to be falsifiable through analysis or
       implementation.
@@ -334,12 +334,12 @@ Dictionary<string, string> glossaryTokenRedirects = new(StringComparer.OrdinalIg
 {
     ["PlainByte"] = "Input",
     ["CipherByte"] = "Cipherbytes",
-    ["KeyBaseData"] = "RedXKey"
+    ["KeyBaseData"] = "ZifikaKey"
 };
 
 string[] infoCorePathWalking = new[]
 {
-    "RedX uses an internal [[Jump stream]] to drive a walk over a keyed 2D permutation grid.",
+    "Zifika uses an internal [[Jump stream]] to drive a walk over a keyed 2D permutation grid.",
     "Each landing emits a [[Key-row offset stream]] value in the same key row.",
     "Ciphertext is the [[Key-row offset stream]], not the [[Jump stream]].",
     "Decryption regenerates the [[Jump stream]] and replays the walk to recover bytes.",
@@ -348,7 +348,7 @@ string[] infoCorePathWalking = new[]
 
 string[] infoPrimerIntro = new[]
 {
-    "RedX is an experimental [[path-walking]] cipher intended for analysis and review only.",
+    "Zifika is an experimental [[path-walking]] cipher intended for analysis and review only.",
     "It uses an internal [[Jump stream]] and outputs a [[Key-row offset stream]] as ciphertext.",
     "It is not production-ready and must not be used in security-critical systems.",
     "Ciphertext is the output of a keyed traversal across a 2D permutation grid; decryption replays that walk to recover plaintext.",
@@ -357,10 +357,10 @@ string[] infoPrimerIntro = new[]
 
 string[] infoMintVerifyIntro = new[]
 {
-    "[[Mint/Verify mode]] in RedX refers to separated capabilities: minting vs verifying.",
+    "[[Mint/Verify mode]] in Zifika refers to separated capabilities: minting vs verifying.",
     "The roles are intentionally inverted: the verifier key can decrypt and verify that the ciphertext was minted by its paired minting key.",
     "If verification fails, no output is produced.",
-    "Verification uses a standard asymmetric signature primitive, applied to the traversal transcript in a RedX-specific way.",
+    "Verification uses a standard asymmetric signature primitive, applied to the traversal transcript in a Zifika-specific way.",
     "The minting key creates ciphertexts and emits a signed traversal transcript (a record of work performed, not plaintext or ciphertext).",
     "This is a capability policy enforced by the [[path-walking]] construction and encoded traversal metadata.",
     "Mint/Verify behavior is not a cryptographic bar on encrypting what you can decrypt; it is a capability lock that prevents ciphertext minted without the paired minting key from validating.",
@@ -466,7 +466,7 @@ string[] infoIntegrityModeIndCca = new[]
 {
     "Strict reject-on-failure aligns with IND-CCA expectations.",
     "Returning null is deliberate: no plaintext is emitted without a valid integrity seal.",
-    "This is analogous to AEAD, but with RedX mapping semantics."
+    "This is analogous to AEAD, but with Zifika mapping semantics."
 };
 
 string[] infoIntegrityModeVsMintVerify = new[]
@@ -757,7 +757,7 @@ void CopyNow(string label, string hex)
 /// </summary>
 void PrintPrimerIntro()
 {
-    WriteLineColor(ConsoleColor.Cyan, "RedX primer");
+    WriteLineColor(ConsoleColor.Cyan, "Zifika primer");
     foreach (var line in infoPrimerIntro)
         WriteInfoLine(line);
 }
@@ -1086,7 +1086,7 @@ void EnsureGlossaryLoaded()
     glossaryLookup = BuildGlossaryLookup(glossaryFileRoot);
 
     var topNodes = glossaryFileRoot.Children;
-    if (topNodes.Count == 1 && string.Equals(topNodes[0].TitleKey, "RedX Primer", StringComparison.OrdinalIgnoreCase))
+    if (topNodes.Count == 1 && string.Equals(topNodes[0].TitleKey, "Zifika Primer", StringComparison.OrdinalIgnoreCase))
         topNodes = topNodes[0].Children;
 
     glossaryMenuRoot = new GlossaryNode
@@ -1358,13 +1358,13 @@ IEnumerable<string> ExtractGlossaryTokens(string line)
 }
 
 /// <summary>
-/// Normalize a glossary token for lookup, applying redirects and ignoring [[RedX]].<br/>
+/// Normalize a glossary token for lookup, applying redirects and ignoring [[Zifika]].<br/>
 /// Returns null when the token should be ignored.<br/>
 /// </summary>
 string NormalizeGlossaryToken(string token)
 {
     if (string.IsNullOrWhiteSpace(token)) return null;
-    if (string.Equals(token, "RedX", StringComparison.OrdinalIgnoreCase)) return null;
+    if (string.Equals(token, "Zifika", StringComparison.OrdinalIgnoreCase)) return null;
     if (glossaryTokenRedirects.TryGetValue(token, out var redirect))
         return redirect;
     return token.Trim();
@@ -1464,7 +1464,7 @@ List<(string Label, byte[] Payload)> BuildPresetPayloads()
         ("len-31-pangramish", BuildPatternPayload(31, "sphinx-of-black-quartz-judge")),
         ("len-32-repeater", BuildPatternPayload(32, "0123456789ABCDEF")),
         ("len-33-horrible", BuildPatternPayload(33, "ctrl-\u0001\u0002\u0003-~-\u007F-x")),
-        ("len-1024-mixed", BuildPatternPayload(1024, "horrible-\u0001\u0002-\u0007-.-crypto-RedX-vKey-")),
+        ("len-1024-mixed", BuildPatternPayload(1024, "horrible-\u0001\u0002-\u0007-.-crypto-Zifika-vKey-")),
         ("len-4096-mundane", BuildPatternPayload(4096, "mundane-rows-cols-path-walk-")),
         ("len-16384-binaryish", BuildPatternPayload(16384, "bin-\u0000\u0001\u0002\u0003-\u001B-~-repeat-"))
     };
@@ -1607,7 +1607,7 @@ byte[]? PromptPayloadBytes(string label)
 /// <summary>
 /// Display serialized key blob hex and inferred block size for the symmetric key.<br/>
 /// </summary>
-void PrintSymmetricKeyInfo(RedXKey key)
+void PrintSymmetricKeyInfo(ZifikaKey key)
 {
     var blob = key.ToBytes();
     int keyLen = BinaryPrimitives.ReadInt32LittleEndian(blob.AsSpan(1, 4));
@@ -1660,7 +1660,7 @@ void CopyCurrentSymmetricCipher() => CopyNow("symmetric ciphertext", lastSymCiph
 /// <summary>
 /// Choose or import a symmetric key (new default/custom block size, or hex import).<br/>
 /// </summary>
-RedXKey ResolveSymmetricKey()
+ZifikaKey ResolveSymmetricKey()
 {
     while (true)
     {
@@ -1677,7 +1677,7 @@ RedXKey ResolveSymmetricKey()
         if (string.Equals(choice, "?", StringComparison.OrdinalIgnoreCase)) { WithBreadcrumb("Key Selection", () => RunGlossaryMenu(GlossaryContextSymmetricKey)); continue; }
         if (string.Equals(choice, "A", StringComparison.OrdinalIgnoreCase))
         {
-            var key = RedX.CreateKey();
+            var key = Zifika.CreateKey();
             PrintSymmetricKeyInfo(key);
             return key;
         }
@@ -1687,7 +1687,7 @@ RedXKey ResolveSymmetricKey()
             if (blkStr == null) continue;
             if (byte.TryParse(blkStr, out var blk) && blk > 0)
             {
-                var key = RedX.CreateKey(blk);
+                var key = Zifika.CreateKey(blk);
                 PrintSymmetricKeyInfo(key);
                 return key;
             }
@@ -1699,7 +1699,7 @@ RedXKey ResolveSymmetricKey()
             if (bytes == null) continue;
             try
             {
-                var key = RedX.CreateKeyFromBytes(bytes);
+                var key = Zifika.CreateKeyFromBytes(bytes);
                 PrintSymmetricKeyInfo(key);
                 return key;
             }
@@ -1714,14 +1714,14 @@ RedXKey ResolveSymmetricKey()
 /// <summary>
 /// Run pre-canned symmetric encrypt/decrypt pairs with the current key and print before/after info.<br/>
 /// </summary>
-void RunSymmetricPreset(RedXKey key, bool useIntegrity)
+void RunSymmetricPreset(ZifikaKey key, bool useIntegrity)
 {
     WriteLineColor(ConsoleColor.Cyan, "=== Symmetric pre-canned cases ===");
     foreach (var (label, plain) in BuildPresetPayloads())
     {
-        var ct = RedX.Encrypt(plain, key, useIntegrity);
+        var ct = Zifika.Encrypt(plain, key, useIntegrity);
         var ctBytes = ct.ToArray();
-        var dec = RedX.Decrypt(new RedxBufferStream(ctBytes), key, useIntegrity);
+        var dec = Zifika.Decrypt(new ZifikaBufferStream(ctBytes), key, useIntegrity);
         var decBytes = dec?.ToArray() ?? Array.Empty<byte>();
         bool match = dec != null && plain.AsSpan().SequenceEqual(decBytes);
         lastSymCipherHex = Convert.ToHexString(ctBytes);
@@ -1739,17 +1739,17 @@ void RunSymmetricPreset(RedXKey key, bool useIntegrity)
 /// <summary>
 /// Interactive symmetric encrypt with the current key; prints plaintext/ciphertext and overhead.<br/>
 /// </summary>
-void SymmetricEncryptInteractive(RedXKey key, bool useIntegrity)
+void SymmetricEncryptInteractive(ZifikaKey key, bool useIntegrity)
 {
     var plain = PromptPayloadBytes("plaintext");
     if (plain == null) return;
     // new plaintext invalidates prior ciphertext
     lastSymCipherHex = null;
-    var ct = RedX.Encrypt(plain, key, useIntegrity);
+    var ct = Zifika.Encrypt(plain, key, useIntegrity);
     var ctBytes = ct.ToArray();
     lastSymCipherHex = Convert.ToHexString(ctBytes);
     lastSymPlainHex = Convert.ToHexString(plain);
-    var dec = RedX.Decrypt(new RedxBufferStream(ctBytes), key, useIntegrity);
+    var dec = Zifika.Decrypt(new ZifikaBufferStream(ctBytes), key, useIntegrity);
     var decBytes = dec?.ToArray() ?? Array.Empty<byte>();
     bool match = dec != null && plain.AsSpan().SequenceEqual(decBytes);
     WriteLineColor(ConsoleColor.Cyan, "=== Symmetric encrypt ===");
@@ -1762,17 +1762,17 @@ void SymmetricEncryptInteractive(RedXKey key, bool useIntegrity)
 /// <summary>
 /// Interactive symmetric decrypt with the current key; prints ciphertext and recovered plaintext.<br/>
 /// </summary>
-void SymmetricDecryptInteractive(RedXKey key, bool requireIntegrity)
+void SymmetricDecryptInteractive(ZifikaKey key, bool requireIntegrity)
 {
     var ctBytes = PromptPayloadBytes("ciphertext (hex preferred)");
     if (ctBytes == null) return;
     WriteLineColor(ConsoleColor.Cyan, "=== Symmetric decrypt ===");
     Console.WriteLine($" ciphertext: {HexWithLen(ctBytes)}");
     lastSymCipherHex = Convert.ToHexString(ctBytes);
-    RedxBufferStream dec = null;
+    ZifikaBufferStream dec = null;
     try
     {
-        dec = RedX.Decrypt(new RedxBufferStream(ctBytes), key, requireIntegrity);
+        dec = Zifika.Decrypt(new ZifikaBufferStream(ctBytes), key, requireIntegrity);
     }
     catch (Exception ex)
     {
@@ -1858,7 +1858,7 @@ void RunSymmetricMenu()
 /// <summary>
 /// Print minting/verifier blobs for Mint/Verify mode with len-tagged hex.<br/>
 /// </summary>
-void PrintMintingInfo(RedXMintingKey minting, RedXVerifierKey vKey)
+void PrintMintingInfo(ZifikaMintingKey minting, ZifikaVerifierKey vKey)
 {
     var mintBlob = minting.ToBytes();
     var verBlob = vKey.ToBytes();
@@ -1920,7 +1920,7 @@ void CopyCurrentMintCipher() => CopyNow("mint ciphertext", lastMintCipherHex);
 /// <summary>
 /// Prompt for a minting/verifier selection: new pair, import minting hex (derives verifier), or import verifier hex.<br/>
 /// </summary>
-void SelectMintVerifyKeys(ref RedXMintingKey minting, ref RedXVerifierKey vKey)
+void SelectMintVerifyKeys(ref ZifikaMintingKey minting, ref ZifikaVerifierKey vKey)
 {
     while (true)
     {
@@ -1937,7 +1937,7 @@ void SelectMintVerifyKeys(ref RedXMintingKey minting, ref RedXVerifierKey vKey)
         if (string.Equals(choice, "?", StringComparison.OrdinalIgnoreCase)) { WithBreadcrumb("Key Options", () => RunGlossaryMenu(GlossaryContextMintVerifyKey)); continue; }
         if (string.Equals(choice, "A", StringComparison.OrdinalIgnoreCase))
         {
-            var pair = RedX.CreateMintingKeyPair();
+            var pair = Zifika.CreateMintingKeyPair();
             minting = pair.minting;
             vKey = pair.verifier;
             PrintMintingInfo(minting, vKey);
@@ -1951,7 +1951,7 @@ void SelectMintVerifyKeys(ref RedXMintingKey minting, ref RedXVerifierKey vKey)
             if (blob == null) continue;
             try
             {
-                minting = RedX.CreateMintingKey(blob);
+                minting = Zifika.CreateMintingKey(blob);
                 vKey = minting.CreateVerifierKey();
                 PrintMintingInfo(minting, vKey);
                 lastMintHex = Convert.ToHexString(minting.ToBytes());
@@ -1969,7 +1969,7 @@ void SelectMintVerifyKeys(ref RedXMintingKey minting, ref RedXVerifierKey vKey)
             if (blob == null) continue;
             try
             {
-                vKey = RedX.CreateVerifierKey(blob);
+                vKey = Zifika.CreateVerifierKey(blob);
                 WriteLineColor(ConsoleColor.Yellow, $" Verifier key blob (hex): {HexWithLen(blob)}");
                 if (minting != null)
                     PrintMintingInfo(minting, vKey);
@@ -1987,17 +1987,17 @@ void SelectMintVerifyKeys(ref RedXMintingKey minting, ref RedXVerifierKey vKey)
 /// <summary>
 /// Run pre-canned Mint/Verify mint/verify pairs with before/after metrics.<br/>
 /// </summary>
-void RunMintVerifyPreset(RedXMintingKey minting, RedXVerifierKey vKey, bool useIntegrity)
+void RunMintVerifyPreset(ZifikaMintingKey minting, ZifikaVerifierKey vKey, bool useIntegrity)
 {
     WriteLineColor(ConsoleColor.Cyan, "=== Mint/Verify pre-canned cases ===");
     foreach (var (label, plain) in BuildPresetPayloads())
     {
-        var ct = RedX.Mint(plain, minting, useIntegrity: useIntegrity);
+        var ct = Zifika.Mint(plain, minting, useIntegrity: useIntegrity);
         var ctBytes = ct.ToArray();
-        RedxBufferStream dec = null;
+        ZifikaBufferStream dec = null;
         try
         {
-            dec = RedX.VerifyAndDecrypt(new RedxBufferStream(ctBytes), vKey, requireIntegrity: useIntegrity);
+            dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity: useIntegrity);
         }
         catch (InvalidDataException ex)
         {
@@ -2025,20 +2025,20 @@ void RunMintVerifyPreset(RedXMintingKey minting, RedXVerifierKey vKey, bool useI
 /// <summary>
 /// Interactive Mint/Verify mint (encrypt) with the current minting key; prints blobs and overhead.<br/>
 /// </summary>
-void MintInteractive(RedXMintingKey minting, RedXVerifierKey vKey, bool useIntegrity)
+void MintInteractive(ZifikaMintingKey minting, ZifikaVerifierKey vKey, bool useIntegrity)
 {
     var plain = PromptPayloadBytes("plaintext");
     if (plain == null) return;
     // new plaintext invalidates prior ciphertext snapshot
     lastMintCipherHex = null;
-    var ct = RedX.Mint(plain, minting, useIntegrity: useIntegrity);
+    var ct = Zifika.Mint(plain, minting, useIntegrity: useIntegrity);
     var ctBytes = ct.ToArray();
     lastMintCipherHex = Convert.ToHexString(ctBytes);
     lastMintPlainHex = Convert.ToHexString(plain);
-    RedxBufferStream dec = null;
+    ZifikaBufferStream dec = null;
     try
     {
-        dec = RedX.VerifyAndDecrypt(new RedxBufferStream(ctBytes), vKey, requireIntegrity: useIntegrity);
+        dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity: useIntegrity);
     }
     catch (InvalidDataException ex)
     {
@@ -2061,17 +2061,17 @@ void MintInteractive(RedXMintingKey minting, RedXVerifierKey vKey, bool useInteg
 /// <summary>
 /// Interactive Mint/Verify verify/decrypt with the current verifier key.<br/>
 /// </summary>
-void VerifyInteractive(RedXVerifierKey vKey, bool requireIntegrity)
+void VerifyInteractive(ZifikaVerifierKey vKey, bool requireIntegrity)
 {
     var ctBytes = PromptPayloadBytes("ciphertext (hex preferred)");
     if (ctBytes == null) return;
     WriteLineColor(ConsoleColor.Cyan, "=== Verify ===");
     Console.WriteLine($" ciphertext: {HexWithLen(ctBytes)}");
     lastMintCipherHex = Convert.ToHexString(ctBytes);
-    RedxBufferStream dec = null;
+    ZifikaBufferStream dec = null;
     try
     {
-        dec = RedX.VerifyAndDecrypt(new RedxBufferStream(ctBytes), vKey, requireIntegrity: requireIntegrity);
+        dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity: requireIntegrity);
     }
     catch (InvalidDataException ex)
     {
@@ -2103,8 +2103,8 @@ void RunMintVerifyMenu()
     breadcrumb = new List<string> { "Main", "Mint/Verify" };
     if (showMintVerifyIntro)
         ShowMintVerifyIntro(ref showMintVerifyIntro);
-    RedXMintingKey minting = null;
-    RedXVerifierKey verifier = null;
+    ZifikaMintingKey minting = null;
+    ZifikaVerifierKey verifier = null;
     bool useIntegrity = true;
     SelectMintVerifyKeys(ref minting, ref verifier);
 
@@ -2182,9 +2182,9 @@ void RunMintVerifyMenu()
 }
 
 /// <summary>
-/// Entry menu for the RedX primer harness; choose symmetric or Mint/Verify flows.<br/>
+/// Entry menu for the Zifika primer harness; choose symmetric or Mint/Verify flows.<br/>
 /// </summary>
-void RunRedXPrimer()
+void RunZifikaPrimer()
 {
     PrintPrimerIntro();
     while (true)
@@ -2205,7 +2205,7 @@ void RunRedXPrimer()
     }
 }
 
-RunRedXPrimer();
+RunZifikaPrimer();
 
 class GlossaryNode
 {

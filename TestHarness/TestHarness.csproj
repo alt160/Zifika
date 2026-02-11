@@ -8,11 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\RedXLib\RedX.csproj" />
+    <PackageReference Include="TextCopy" Version="6.1.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="TextCopy" Version="6.1.0" />
+    <ProjectReference Include="..\ZifikaLib\ZifikaLib.csproj" />
   </ItemGroup>
 
 </Project>
