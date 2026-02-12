@@ -37,8 +37,8 @@ namespace ZifikaLib
     /// Mint/Verify with minting/verifier composites (no direct ECDsa handling):<br/>
     /// <code><![CDATA[
     /// var (minting, verifier) = Zifika.CreateMintingKeyPair();
-    /// var cipher = Zifika.EncryptMint(data, minting);
-    /// var recovered = Zifika.DecryptMintWithAuthority(cipher, verifier);
+    /// var cipher = Zifika.Mint(data, minting);
+    /// var recovered = Zifika.VerifyAndDecrypt(cipher, verifier);
     /// var mintingBlob = minting.ToBytes();
     /// var verifierBlob = verifier.ToBytes();
     /// var minting2 = Zifika.CreateMintingKey(mintingBlob);

@@ -100,7 +100,8 @@ A per‑message byte array called the **interference catalyst** (`intCat`) is a 
 When enabled, Zifika appends an encrypted integrity seal to the ciphertext.
 
 - Seal length: **32 bytes (256 bits)** in the current implementation.
-- Seal material: `integritySeal32B = Blake3(enc(startLocation1Bit) || rowEncodedStream || intCat)`.
+- Symmetric seal material: `integritySeal32B = Blake3(enc(startLocation1Bit) || rowOffsetStream || intCat)`.
+- Mint/Verify seal material: `integritySeal32B = Blake3(rowOffsetStream || intCat)`.
 - The seal bytes are appended **in mapped (encrypted) form**.
 
 Decryption recomputes the expected seal and compares it to the decrypted seal. If the integrity check fails, decryption returns `null`. Plaintext is not materialized internally unless verification succeeds.
@@ -191,19 +192,20 @@ Where `enc(...)` means Zifika mapping using the full key.
 
 Integrity seal, when enabled:
 
-- `integritySeal32B = Blake3(enc(startLocation1Bit) || rowOffsetStream || intCat) (32 bytes)`
-- It is appended in encrypted form.
+- Symmetric: `integritySeal32B = Blake3(enc(startLocation1Bit) || rowOffsetStream || intCat)` (32 bytes), appended in encrypted form.
+- Mint/Verify: `integritySeal32B = Blake3(rowOffsetStream || intCat)` (32 bytes), appended in encrypted form.
 
 ### Mint and Verify mode layout
 
 Mint and Verify ciphertext is:
 
-- `vKeyLock4` plain bytes
-- `enc_v(startLocation1Bit)`
+- `vKeyLock16` plain bytes
+- `enc_v(startLocationU16LE)`
 - `enc_v(checkpointCount32)`
 - `enc_v(signature64) * N`
 - `enc_v(intCatLen)`
 - `enc_v(intCat)`
+- `enc_v(cipherLen32)`
 - `rowOffsetStream`
 - optional: `enc_v(integritySeal32B)`
 
@@ -211,15 +213,14 @@ Where `enc_v(...)` means header mapping that is decryptable by the verifier key.
 
 Notes:
 
-- The verifier-header mapping may use a compact marker encoding for small blobs.
 - Authority signatures are ECDSA P-256 in IEEE-P1363 fixed concatenation format (64 bytes).
 
 ## Authority checkpoints
 
 Mint and Verify binds provenance by signing a 32-byte **observer state** at one or more checkpoints.
 
-- For payloads up to 4 KiB, Zifika uses a single accumulator signature.
-- For larger payloads, it computes a checkpoint plan capped by `maxCheckpoints`.
+- Checkpoints are planned from payload length at roughly 1 checkpoint per 64 steps.
+- Checkpoint count is capped by `maxCheckpoints`.
 
 Verification recomputes observer state while replaying the ciphertext walk and requires all signatures to verify before returning plaintext.
 
@@ -235,7 +236,7 @@ Zifika produces identical ciphertext.
 
 Although the payload key is reshuffled per message, the reshuffle is fully determined by `intCat`; therefore determinism still holds when `startLocation` and `intCat` are identical.
 
-In normal use, `startLocation` and `intCat` are randomized per message, which makes ciphertext vary in length and content between encryptions over the same plaintext.
+In normal use, `startLocation` and `intCat` are randomized per message, which makes ciphertext vary in length and content between encryptions over the same plaintext. In Mint/Verify mode, per-message `vKeyLock` and authority signatures are also randomized, so practical outputs vary even when payload inputs repeat.
 
 ## What to review
 

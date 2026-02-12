@@ -127,7 +127,7 @@ const string GlossaryPrimerSource = @"[[Zifika]] Primer
     [[Zifika]] is a symmetric cipher construction based
     on deterministic [[Traversal]] over a two-
     dimensional permutation grid. [[Cipherbytes]]
-    are the result of relative traversal distances rather than
+    are row-encoded distance bytes rather than
     transformed plaintext values.
 
   [[Core Concepts]]
@@ -135,15 +135,16 @@ const string GlossaryPrimerSource = @"[[Zifika]] Primer
     [[Plainbytes]]
       [[Plainbytes]] are byte values consumed during
       [[Traversal]]. They include user input bytes
-      and injected bytes such as [[PrefixBytes]] and
-      [[StartLocation]] encodings. All [[Plainbytes]]
+      and injected bytes such as [[InterferenceCatalyst]]-mixed
+      payload bytes. All [[Plainbytes]]
       are processed uniformly.
 
     [[Cipherbytes]]
-      [[Cipherbytes]] are the distance values between
-      successive traversal landing positions within
-      a single 256-byte key row. They do not represent
-      transformed plaintext values.
+      [[Cipherbytes]] are the row-encoded bytes emitted
+      from forward wrapped distances between
+      successive traversal landing positions in
+      a 256-byte key row. They do not represent
+      transformed plaintext values directly.
 
     [[Traversal]]
       [[Traversal]] is the deterministic process of
@@ -168,19 +169,20 @@ const string GlossaryPrimerSource = @"[[Zifika]] Primer
       advances to the next key row deterministically,
       modulo the total row count.
 
-  [[Start Location And Prefixes]]
+  [[Start Location And Header Inputs]]
 
     [[StartLocation]]
       The [[StartLocation]] is a per-execution value
       that establishes the initial traversal origin.
       Its encoded bytes are consumed as [[Plainbytes]]
-      across multiple traversal steps.
+      in symmetric headers and as fixed two-byte
+      control-stream data in [[MintVerifyMode]].
 
-    [[PrefixBytes]]
-      [[PrefixBytes]] are a per-execution sequence of
-      injected [[Plainbytes]] consumed before user
-      input. They are indistinguishable from user
-      input during traversal.
+    [[InterferenceCatalyst]]
+      The [[InterferenceCatalyst]] is a per-execution
+      header value carried in mapped form. It seeds
+      the jump stream and mixes payload bytes by
+      position during traversal replay.
 
   [[Input And Plainbytes]]
 
@@ -190,9 +192,10 @@ const string GlossaryPrimerSource = @"[[Zifika]] Primer
       is a [[Plainbyte]].
 
     [[PlainbyteSources]]
-      [[Plainbytes]] include user input bytes,
-      [[PrefixBytes]], [[StartLocation]] bytes, and
-      other injected per-execution values. Source
+      [[Plainbytes]] include user input bytes and
+      per-execution values influenced by
+      [[InterferenceCatalyst]] and [[StartLocation]].
+      Source
       does not affect traversal behavior.
 
   [[Integrity]]
@@ -259,9 +262,9 @@ const string GlossaryPrimerSource = @"[[Zifika]] Primer
           [[VerifierKey]], or standalone signing key.
 
         [[ExecutionForm]]
-          A [[MintingKey]] cannot decrypt or verify
-          ciphertext and cannot validate ciphertexts
-          minted by other keys.
+          A [[MintingKey]] is intended for minting and
+          signing. It does not provide the verifier-only
+          validation path used by [[VerifierKey]].
 
     [[VerifierKey]]
 
@@ -380,11 +383,11 @@ string[] infoJumpStream = new[]
 
 string[] infoKeyRowOffsetStream = new[]
 {
-    "[[Key-row offset stream]] is the wrapped distance from each landing byte to the byte matching the next plaintext byte in the same key row.",
+    "[[Key-row offset stream]] is the row-encoded byte stream produced from forward wrapped distances to target columns in each key row.",
     "It is the ciphertext payload written to the wire.",
     "It varies per execution because [[Random Start Location]] and [[Interference catalyst]] change.",
     "Decryption regenerates the [[Jump stream]] and applies these offsets to recover plaintext.",
-    "It records traversal offsets, not plaintext bytes."
+    "It records encoded traversal offsets, not plaintext bytes."
 };
 
 string[] infoInterferenceCatalyst = new[]
@@ -408,7 +411,7 @@ string[] infoRandomStartLocation = new[]
 string[] infoCiphertextProductionOverview = new[]
 {
     "Ciphertext is produced by a traversal; the payload is a [[Key-row offset stream]].",
-    "Header fields are mapped at fixed positions (pos-0 or [[Interference catalyst]] length).",
+    "Header control fields are mapped with startLocation=0, while [[Interference catalyst]] bytes are mapped from [[Random Start Location]].",
     "Payload is mapped from a [[Random Start Location]].",
     "The [[Jump stream]] is internal and not written to ciphertext.",
     "No plaintext bytes are stored or signed directly.",
@@ -450,7 +453,9 @@ string[] infoKeySizingLarge = new[]
 
 string[] infoIntegrityModeWhat = new[]
 {
-    "[[Integrity mode]] adds an integrity seal over [[Key-row offset stream]] + [[Interference catalyst]].",
+    "[[Integrity mode]] appends a 32-byte mapped integrity seal.",
+    "Symmetric seal input is enc(startLocation1Bit) + [[Key-row offset stream]] + [[Interference catalyst]].",
+    "Mint/Verify seal input is [[Key-row offset stream]] + [[Interference catalyst]].",
     "The seal is unique per execution, even for the same key and same plaintext.",
     "When enabled, decrypt requires a valid seal.",
     "Missing or invalid seals return null.",
@@ -460,8 +465,9 @@ string[] infoIntegrityModeWhat = new[]
 
 string[] infoIntegrityModeWhy = new[]
 {
-    "Any change to [[Key-row offset stream]] or [[Interference catalyst]] changes the seal.",
-    "The seal is mapped under the same keying as the payload.",
+    "Any change to seal inputs changes the expected seal.",
+    "Symmetric mode also binds raw mapped start-location header bytes into the seal input.",
+    "The seal bytes are mapped under the same traversal machinery before being appended.",
     "This binds integrity to the walk, not to plaintext bytes."
 };
 
@@ -551,7 +557,7 @@ string[] infoFailureSemantics = new[]
 string[] infoWirePhysicalLogical = new[]
 {
     "Physical layout is a byte stream with minimal framing.",
-    "Only [[Interference catalyst]] length (and vKeyLock in [[Mint/Verify mode]]) are plaintext; other fields are mapped.",
+    "Only vKeyLock in [[Mint/Verify mode]] remains plaintext; startLocation/intCatLen/intCat/checkpoints are mapped.",
     "Logical structure appears in two phases:",
     "1) decode control fields at fixed positions,",
     "2) decode payload from a [[Random Start Location]] into a [[Key-row offset stream]].",
@@ -560,26 +566,27 @@ string[] infoWirePhysicalLogical = new[]
 
 string[] infoWireSymmetric = new[]
 {
-    "Symmetric (integrity off): enc(startLoc) | intCatLen | enc(intCat) | [[Key-row offset stream]]",
-    "Symmetric (integrity on):  enc(startLoc) | intCatLen | enc(intCat) | [[Key-row offset stream]] | enc(seal)",
-    "[[Random Start Location]] is mapped at pos-0; [[Interference catalyst]] is mapped at pos-intCatLen.",
+    "Symmetric (integrity off): enc(startLoc1Bit) | enc(intCatLen) | enc(intCat) | [[Key-row offset stream]]",
+    "Symmetric (integrity on):  enc(startLoc1Bit) | enc(intCatLen) | enc(intCat) | [[Key-row offset stream]] | enc(seal32)",
+    "[[Random Start Location]] and intCatLen are header-mapped with startLocation=0; [[Interference catalyst]] is mapped from [[Random Start Location]].",
     "Payload [[Key-row offset stream]] is mapped from the [[Random Start Location]]."
 };
 
 string[] infoWireMintVerify = new[]
 {
-    "[[Mint/Verify mode]] (integrity off): vKeyLock | enc(startLoc) | enc(ckCount) | enc(sigs) | intCatLen | enc(intCat) | [[Key-row offset stream]]",
-    "[[Mint/Verify mode]] (integrity on):  vKeyLock | enc(startLoc) | enc(ckCount) | enc(sigs) | intCatLen | enc(intCat) | [[Key-row offset stream]] | enc(seal)",
-    "Control stream is verifier-mapped using vKeyLock at pos-0.",
+    "[[Mint/Verify mode]] (integrity off): vKeyLock16 | enc(startLocU16LE) | enc(ckCount32) | enc(sig64)*N | enc(intCatLen) | enc(intCat) | enc(cipherLen32) | [[Key-row offset stream]]",
+    "[[Mint/Verify mode]] (integrity on):  vKeyLock16 | enc(startLocU16LE) | enc(ckCount32) | enc(sig64)*N | enc(intCatLen) | enc(intCat) | enc(cipherLen32) | [[Key-row offset stream]] | enc(seal32)",
+    "Control stream is verifier-mapped using vKeyLock with startLocation=0.",
     "Payload [[Key-row offset stream]] is mapped from the [[Random Start Location]]."
 };
 
 string[] infoWireHeaderFields = new[]
 {
     "vKeyLock: per-message binder for control stream mapping.",
-    "[[Random Start Location]]: encrypted at pos-0; selects payload walk origin.",
-    "[[Interference catalyst]]: encrypted at pos-intCatLen; mixes into mapping for replay resistance.",
-    "In [[Mint/Verify mode]], [[Random Start Location]] is mapped under vKeyLock for verifier recovery.",
+    "[[Random Start Location]]: mapped header field; symmetric uses 1-bit encoding, Mint/Verify uses fixed U16LE.",
+    "intCatLen: mapped one-byte field in both symmetric and Mint/Verify headers.",
+    "[[Interference catalyst]]: mapped from [[Random Start Location]] and used for replay diversification.",
+    "In [[Mint/Verify mode]], checkpoint count/signatures and cipherLen are mapped under vKeyLock.",
     "vKeyLock remains plaintext to bootstrap header decode."
 };
 
