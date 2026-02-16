@@ -93,20 +93,63 @@ A per‑message byte array called the **interference catalyst** (`intCat`) is a 
 4. **Payload boundary obscuring**: because `intCatLen` varies and the catalyst bytes are present early in the encrypted header, it becomes harder to infer where the payload begins from structure alone.
 5. **Per‑message key reshaping**: `intCat` is used to reshuffle the base Zifika key (via Fisher–Yates) before payload processing, producing a message‑specific ephemeral key that is not reused across encryptions.
 
-`intCat` is also included in the optional integrity seal computation.
+`intCat` is also included in integrity seal computation.
 
 ## Integrity seal
 
-When enabled, Zifika appends an encrypted integrity seal to the ciphertext.
+By default, Zifika appends an encrypted integrity seal to the ciphertext.
 
 - Seal length: **32 bytes (256 bits)** in the current implementation.
 - Symmetric seal material: `integritySeal32B = Blake3(enc(startLocation1Bit) || rowOffsetStream || intCat)`.
 - Mint/Verify seal material: `integritySeal32B = Blake3(rowOffsetStream || intCat)`.
 - The seal bytes are appended **in mapped (encrypted) form**.
 
+Public `Encrypt`/`Decrypt` and `Mint`/`VerifyAndDecrypt` APIs are sealed by default and always require this integrity path.
+
 Decryption recomputes the expected seal and compares it to the decrypted seal. If the integrity check fails, decryption returns `null`. Plaintext is not materialized internally unless verification succeeds.
 
 This provides tamper and corruption detection with a fail‑closed decryption behavior: modified ciphertext is rejected before any plaintext is released.
+
+## Unsafe no-seal mode
+
+Zifika exposes explicit research/debug APIs that disable integrity checks:
+
+- `EncryptWithoutSeal`
+- `DecryptWithoutSeal`
+- `MintWithoutSeal`
+- `VerifyAndDecryptWithoutSeal`
+
+These APIs require both:
+
+1. Explicit consent token: `NoSealConsent.IUnderstandThisDisablesIntegrityChecks`
+2. Environment variable: `ZIFIKA_ALLOW_UNSEALED=1`
+
+If either is missing, the call throws `SecurityException`.
+
+```csharp
+using ZifikaLib;
+using System.Text;
+
+// required runtime unlock
+Environment.SetEnvironmentVariable("ZIFIKA_ALLOW_UNSEALED", "1");
+
+var key = Zifika.CreateKey();
+var plain = Encoding.UTF8.GetBytes("hello");
+using var ct = Zifika.EncryptWithoutSeal(plain, key, NoSealConsent.IUnderstandThisDisablesIntegrityChecks);
+using var dec = Zifika.DecryptWithoutSeal(ct, key, NoSealConsent.IUnderstandThisDisablesIntegrityChecks);
+```
+
+```csharp
+using ZifikaLib;
+using System.Text;
+
+Environment.SetEnvironmentVariable("ZIFIKA_ALLOW_UNSEALED", "1");
+
+var (minting, verifier) = Zifika.CreateMintingKeyPair();
+var plain = Encoding.UTF8.GetBytes("hello");
+using var ct = Zifika.MintWithoutSeal(plain, minting, NoSealConsent.IUnderstandThisDisablesIntegrityChecks);
+using var dec = Zifika.VerifyAndDecryptWithoutSeal(ct, verifier, NoSealConsent.IUnderstandThisDisablesIntegrityChecks);
+```
 
 ## Key Types
 
@@ -186,14 +229,15 @@ Symmetric ciphertext is:
 - `enc(intCatLen)`
 - `enc(intCat)`
 - `rowOffsetStream`
-- optional: `enc(integritySeal32B)`
+- `enc(integritySeal32B)` (default sealed APIs)
 
 Where `enc(...)` means Zifika mapping using the full key.
 
-Integrity seal, when enabled:
+Integrity seal:
 
 - Symmetric: `integritySeal32B = Blake3(enc(startLocation1Bit) || rowOffsetStream || intCat)` (32 bytes), appended in encrypted form.
 - Mint/Verify: `integritySeal32B = Blake3(rowOffsetStream || intCat)` (32 bytes), appended in encrypted form.
+- `*WithoutSeal` APIs emit wire layouts without this final segment.
 
 ### Mint and Verify mode layout
 
@@ -207,7 +251,7 @@ Mint and Verify ciphertext is:
 - `enc_v(intCat)`
 - `enc_v(cipherLen32)`
 - `rowOffsetStream`
-- optional: `enc_v(integritySeal32B)`
+- `enc_v(integritySeal32B)` (default sealed APIs)
 
 Where `enc_v(...)` means header mapping that is decryptable by the verifier key.
 

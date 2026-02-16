@@ -120,6 +120,40 @@ const string GlossaryContextSymmetric = "symmetric";
 const string GlossaryContextMintVerify = "mint-verify";
 const string GlossaryContextSymmetricKey = "symmetric-key";
 const string GlossaryContextMintVerifyKey = "mint-verify-key";
+const NoSealConsent UnsafeNoSealConsent = NoSealConsent.IUnderstandThisDisablesIntegrityChecks;
+
+void PrintIntegrityOffBlockedHint()
+{
+    WriteLineColor(ConsoleColor.Yellow, $" integrity-off mode blocked. Set environment variable {Zifika.AllowUnsealedEnvVar}=1 to enable.");
+}
+
+ZifikaBufferStream EncryptWithIntegrityMode(byte[] plain, ZifikaKey key, bool useIntegrity)
+{
+    return useIntegrity
+        ? Zifika.Encrypt(plain, key)
+        : Zifika.EncryptWithoutSeal(plain, key, UnsafeNoSealConsent);
+}
+
+ZifikaBufferStream DecryptWithIntegrityMode(ZifikaBufferStream ciphertext, ZifikaKey key, bool requireIntegrity)
+{
+    return requireIntegrity
+        ? Zifika.Decrypt(ciphertext, key)
+        : Zifika.DecryptWithoutSeal(ciphertext, key, UnsafeNoSealConsent);
+}
+
+ZifikaBufferStream MintWithIntegrityMode(ReadOnlySpan<byte> plain, ZifikaMintingKey minting, bool useIntegrity)
+{
+    return useIntegrity
+        ? Zifika.Mint(plain, minting)
+        : Zifika.MintWithoutSeal(plain, minting, UnsafeNoSealConsent);
+}
+
+ZifikaBufferStream VerifyAndDecryptWithIntegrityMode(ZifikaBufferStream ciphertext, ZifikaVerifierKey verifier, bool requireIntegrity)
+{
+    return requireIntegrity
+        ? Zifika.VerifyAndDecrypt(ciphertext, verifier)
+        : Zifika.VerifyAndDecryptWithoutSeal(ciphertext, verifier, UnsafeNoSealConsent);
+}
 
 const string GlossaryPrimerSource = @"[[Zifika]] Primer
 
@@ -1649,7 +1683,7 @@ bool IsSymmetricBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPla
 {
     try
     {
-        using var dec = Zifika.Decrypt(new ZifikaBufferStream(tampered), key, requireIntegrity);
+        using var dec = DecryptWithIntegrityMode(new ZifikaBufferStream(tampered), key, requireIntegrity);
         if (dec == null)
         {
             outcome = "blocked(null)";
@@ -1681,7 +1715,7 @@ bool IsMintVerifyBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPl
 {
     try
     {
-        using var dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(tampered), verifier, requireIntegrity: requireIntegrity);
+        using var dec = VerifyAndDecryptWithIntegrityMode(new ZifikaBufferStream(tampered), verifier, requireIntegrity);
         if (dec == null)
         {
             outcome = "blocked(null)";
@@ -2401,12 +2435,12 @@ void RunAnalysisSuite(string profileLabel, int sampleCount, int seed)
             seed ^ StableSeedFromLabel("sym-core"),
             plain =>
             {
-                using var ct = Zifika.Encrypt(plain, symKey, useIntegrity: true);
+                using var ct = Zifika.Encrypt(plain, symKey);
                 return ct.ToArray();
             },
             (wire, plain) =>
             {
-                using var dec = Zifika.Decrypt(new ZifikaBufferStream(wire), symKey, requireIntegrity: true);
+                using var dec = Zifika.Decrypt(new ZifikaBufferStream(wire), symKey);
                 return dec != null && plain.AsSpan().SequenceEqual(dec.AsReadOnlySpan);
             },
             (wire, plain) =>
@@ -2427,12 +2461,12 @@ void RunAnalysisSuite(string profileLabel, int sampleCount, int seed)
             seed ^ StableSeedFromLabel("mv-core"),
             plain =>
             {
-                using var ct = Zifika.Mint(plain, mainPair.minting, useIntegrity: true);
+                using var ct = Zifika.Mint(plain, mainPair.minting);
                 return ct.ToArray();
             },
             (wire, plain) =>
             {
-                using var dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(wire), mainPair.verifier, requireIntegrity: true);
+                using var dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(wire), mainPair.verifier);
                 return dec != null && plain.AsSpan().SequenceEqual(dec.AsReadOnlySpan);
             },
             (wire, plain) =>
@@ -2451,12 +2485,12 @@ void RunAnalysisSuite(string profileLabel, int sampleCount, int seed)
             seed ^ StableSeedFromLabel("mv-core"),
             plain =>
             {
-                using var ct = Zifika.Mint(plain, mainPair.minting, useIntegrity: true);
+                using var ct = Zifika.Mint(plain, mainPair.minting);
                 return ct.ToArray();
             },
             (wire, plain) =>
             {
-                using var dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(wire), mainPair.verifier, requireIntegrity: true);
+                using var dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(wire), mainPair.verifier);
                 return dec != null && plain.AsSpan().SequenceEqual(dec.AsReadOnlySpan);
             },
             (wire, plain) =>
@@ -2882,9 +2916,19 @@ void RunSymmetricPreset(ZifikaKey key, bool useIntegrity)
     WriteLineColor(ConsoleColor.Cyan, "=== Symmetric pre-canned cases ===");
     foreach (var (label, plain) in BuildPresetPayloads())
     {
-        var ct = Zifika.Encrypt(plain, key, useIntegrity);
-        var ctBytes = ct.ToArray();
-        var dec = Zifika.Decrypt(new ZifikaBufferStream(ctBytes), key, useIntegrity);
+        byte[] ctBytes;
+        ZifikaBufferStream dec;
+        try
+        {
+            using var ct = EncryptWithIntegrityMode(plain, key, useIntegrity);
+            ctBytes = ct.ToArray();
+            dec = DecryptWithIntegrityMode(new ZifikaBufferStream(ctBytes), key, useIntegrity);
+        }
+        catch (System.Security.SecurityException)
+        {
+            PrintIntegrityOffBlockedHint();
+            return;
+        }
         var decBytes = dec?.ToArray() ?? Array.Empty<byte>();
         bool match = dec != null && plain.AsSpan().SequenceEqual(decBytes);
         lastSymCipherHex = Convert.ToHexString(ctBytes);
@@ -2933,8 +2977,16 @@ void RunSymmetricAttackPreset(bool requireIntegrity, bool detail)
     var vectors = new List<(string Label, byte[] Plain, byte[] Cipher)>(payloads.Count);
     foreach (var (label, plain) in payloads)
     {
-        using var ct = Zifika.Encrypt(plain, key, useIntegrity: requireIntegrity);
-        vectors.Add((label, plain, ct.ToArray()));
+        try
+        {
+            using var ct = EncryptWithIntegrityMode(plain, key, requireIntegrity);
+            vectors.Add((label, plain, ct.ToArray()));
+        }
+        catch (System.Security.SecurityException)
+        {
+            PrintIntegrityOffBlockedHint();
+            return;
+        }
     }
 
     int totalCases = 0;
@@ -3016,13 +3068,24 @@ void SymmetricEncryptInteractive(ZifikaKey key, bool useIntegrity)
     if (plain == null) return;
     // new plaintext invalidates prior ciphertext
     lastSymCipherHex = null;
-    var ct = Zifika.Encrypt(plain, key, useIntegrity);
-    var ctBytes = ct.ToArray();
+    byte[] ctBytes;
+    byte[] decBytes;
+    bool match;
+    try
+    {
+        using var ct = EncryptWithIntegrityMode(plain, key, useIntegrity);
+        ctBytes = ct.ToArray();
+        using var dec = DecryptWithIntegrityMode(new ZifikaBufferStream(ctBytes), key, useIntegrity);
+        decBytes = dec?.ToArray() ?? Array.Empty<byte>();
+        match = dec != null && plain.AsSpan().SequenceEqual(decBytes);
+    }
+    catch (System.Security.SecurityException)
+    {
+        PrintIntegrityOffBlockedHint();
+        return;
+    }
     lastSymCipherHex = Convert.ToHexString(ctBytes);
     lastSymPlainHex = Convert.ToHexString(plain);
-    var dec = Zifika.Decrypt(new ZifikaBufferStream(ctBytes), key, useIntegrity);
-    var decBytes = dec?.ToArray() ?? Array.Empty<byte>();
-    bool match = dec != null && plain.AsSpan().SequenceEqual(decBytes);
     WriteLineColor(ConsoleColor.Cyan, "=== Symmetric encrypt ===");
     Console.WriteLine($" plaintext utf8: {Utf8WithLen(plain)}");
     Console.WriteLine($" plaintext hex:  {HexWithLen(plain)}");
@@ -3043,7 +3106,12 @@ void SymmetricDecryptInteractive(ZifikaKey key, bool requireIntegrity)
     ZifikaBufferStream dec = null;
     try
     {
-        dec = Zifika.Decrypt(new ZifikaBufferStream(ctBytes), key, requireIntegrity);
+        dec = DecryptWithIntegrityMode(new ZifikaBufferStream(ctBytes), key, requireIntegrity);
+    }
+    catch (System.Security.SecurityException)
+    {
+        PrintIntegrityOffBlockedHint();
+        return;
     }
     catch (Exception ex)
     {
@@ -3263,12 +3331,21 @@ void RunMintVerifyPreset(ZifikaMintingKey minting, ZifikaVerifierKey vKey, bool 
     WriteLineColor(ConsoleColor.Cyan, "=== Mint/Verify pre-canned cases ===");
     foreach (var (label, plain) in BuildPresetPayloads())
     {
-        var ct = Zifika.Mint(plain, minting, useIntegrity: useIntegrity);
-        var ctBytes = ct.ToArray();
+        byte[] ctBytes;
+        try
+        {
+            using var ct = MintWithIntegrityMode(plain, minting, useIntegrity);
+            ctBytes = ct.ToArray();
+        }
+        catch (System.Security.SecurityException)
+        {
+            PrintIntegrityOffBlockedHint();
+            return;
+        }
         ZifikaBufferStream dec = null;
         try
         {
-            dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity: useIntegrity);
+            dec = VerifyAndDecryptWithIntegrityMode(new ZifikaBufferStream(ctBytes), vKey, useIntegrity);
         }
         catch (InvalidDataException ex)
         {
@@ -3313,8 +3390,16 @@ void RunMintVerifyAttackPreset(bool requireIntegrity, bool detail)
     var vectors = new List<(string Label, byte[] Plain, byte[] Cipher)>(payloads.Count);
     foreach (var (label, plain) in payloads)
     {
-        using var ct = Zifika.Mint(plain, minting, useIntegrity: requireIntegrity);
-        vectors.Add((label, plain, ct.ToArray()));
+        try
+        {
+            using var ct = MintWithIntegrityMode(plain, minting, requireIntegrity);
+            vectors.Add((label, plain, ct.ToArray()));
+        }
+        catch (System.Security.SecurityException)
+        {
+            PrintIntegrityOffBlockedHint();
+            return;
+        }
     }
 
     int totalCases = 0;
@@ -3387,14 +3472,28 @@ void MintInteractive(ZifikaMintingKey minting, ZifikaVerifierKey vKey, bool useI
     if (plain == null) return;
     // new plaintext invalidates prior ciphertext snapshot
     lastMintCipherHex = null;
-    var ct = Zifika.Mint(plain, minting, useIntegrity: useIntegrity);
-    var ctBytes = ct.ToArray();
+    byte[] ctBytes;
+    try
+    {
+        using var ct = MintWithIntegrityMode(plain, minting, useIntegrity);
+        ctBytes = ct.ToArray();
+    }
+    catch (System.Security.SecurityException)
+    {
+        PrintIntegrityOffBlockedHint();
+        return;
+    }
     lastMintCipherHex = Convert.ToHexString(ctBytes);
     lastMintPlainHex = Convert.ToHexString(plain);
     ZifikaBufferStream dec = null;
     try
     {
-        dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity: useIntegrity);
+        dec = VerifyAndDecryptWithIntegrityMode(new ZifikaBufferStream(ctBytes), vKey, useIntegrity);
+    }
+    catch (System.Security.SecurityException)
+    {
+        PrintIntegrityOffBlockedHint();
+        return;
     }
     catch (InvalidDataException ex)
     {
@@ -3427,7 +3526,12 @@ void VerifyInteractive(ZifikaVerifierKey vKey, bool requireIntegrity)
     ZifikaBufferStream dec = null;
     try
     {
-        dec = Zifika.VerifyAndDecrypt(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity: requireIntegrity);
+        dec = VerifyAndDecryptWithIntegrityMode(new ZifikaBufferStream(ctBytes), vKey, requireIntegrity);
+    }
+    catch (System.Security.SecurityException)
+    {
+        PrintIntegrityOffBlockedHint();
+        return;
     }
     catch (InvalidDataException ex)
     {

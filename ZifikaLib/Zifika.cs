@@ -18,6 +18,13 @@ using System.Text;
 namespace ZifikaLib
 {
     /// <summary>
+    /// Explicit opt-in token required for no-seal (integrity-disabled) APIs.
+    /// </summary>
+    public enum NoSealConsent
+    {
+        IUnderstandThisDisablesIntegrityChecks = 1
+    }
+    /// <summary>
     /// The <see cref="Zifika"/> class exposes the public surface for the Zifika path-walking cipher.<br/>
     /// The cipher walks a keyed 2D permutation grid, uses an internal jump stream, and emits a key-row offset stream as ciphertext that is replayed to recover plaintext.<br/>
     /// Zifika supports both symmetric encrypt/decrypt (full key) and a producer-locked<br/>
@@ -199,12 +206,56 @@ namespace ZifikaLib
                 Console.WriteLine("[mint-debug] " + message);
         }
         /// <summary>
-        /// Symmetric decrypt using the full key.<br/>
-        /// Assumes the symmetric wire layout: enc(startLocation1Bit) | enc(intCatLen) | enc(intCat) | key-row offset stream | [enc(integritySeal, optional)].<br/>
-        /// Integrity seal binds the raw encrypted startLocation header bytes plus (row-offset stream || intCat), so header-bit tampering is detected.<br/>
-        /// When requireIntegrity is true, a 32-byte integrity seal must be present and valid; when false, no integrity seal is expected. Missing/invalid integrity fails decryption (no fallback).<br/>
+        /// Guard no-seal APIs behind explicit consent and a runtime environment flag.
         /// </summary>
-        public static ZifikaBufferStream Decrypt(ZifikaBufferStream ciphertext, ZifikaKey key, bool requireIntegrity = true)
+        private static void EnsureNoSealAuthorized(NoSealConsent consent)
+        {
+            if (consent != NoSealConsent.IUnderstandThisDisablesIntegrityChecks)
+                throw new ArgumentOutOfRangeException(nameof(consent), "No-seal mode requires explicit consent token.");
+
+            if (!string.Equals(Environment.GetEnvironmentVariable(AllowUnsealedEnvVar), "1", StringComparison.Ordinal))
+            {
+                throw new System.Security.SecurityException(
+                    $"No-seal mode disables tamper detection and is blocked by default. " +
+                    $"Enable only for research/debug by setting environment variable {AllowUnsealedEnvVar}=1.");
+            }
+        }
+        /// <summary>
+        /// Symmetric decrypt using the full key.<br/>
+        /// Assumes the symmetric wire layout: enc(startLocation1Bit) | enc(intCatLen) | enc(intCat) | key-row offset stream | enc(integritySeal).<br/>
+        /// Integrity seal binds the raw encrypted startLocation header bytes plus (row-offset stream || intCat), so header-bit tampering is detected.<br/>
+        /// A 32-byte integrity seal must be present and valid. Missing/invalid integrity fails decryption (no fallback).<br/>
+        /// </summary>
+        public static ZifikaBufferStream Decrypt(ZifikaBufferStream ciphertext, ZifikaKey key)
+        {
+            return DecryptCore(ciphertext, key, requireIntegrity: true);
+        }
+        /// <summary>
+        /// Symmetric decrypt without integrity seal validation.<br/>
+        /// Dangerous research/debug API: disables tamper detection.
+        /// </summary>
+        public static ZifikaBufferStream DecryptWithoutSeal(ZifikaBufferStream ciphertext, ZifikaKey key, NoSealConsent consent)
+        {
+            EnsureNoSealAuthorized(consent);
+            return DecryptCore(ciphertext, key, requireIntegrity: false);
+        }
+        /// <summary>
+        /// Overload for byte[] ciphertext convenience for symmetric decrypt.
+        /// Wraps the byte array in a BufferStream and forwards to the symmetric decrypt path.
+        /// </summary>
+        public static ZifikaBufferStream Decrypt(byte[] ciphertext, ZifikaKey key)
+        {
+            return Decrypt(new ZifikaBufferStream(ciphertext), key);
+        }
+        /// <summary>
+        /// Byte[] convenience overload for no-seal symmetric decrypt.<br/>
+        /// Dangerous research/debug API: disables tamper detection.
+        /// </summary>
+        public static ZifikaBufferStream DecryptWithoutSeal(byte[] ciphertext, ZifikaKey key, NoSealConsent consent)
+        {
+            return DecryptWithoutSeal(new ZifikaBufferStream(ciphertext), key, consent);
+        }
+        private static ZifikaBufferStream DecryptCore(ZifikaBufferStream ciphertext, ZifikaKey key, bool requireIntegrity)
         {
             if (ciphertext == null) throw new ArgumentNullException(nameof(ciphertext));
             if (key == null) throw new ArgumentNullException(nameof(key));
@@ -273,19 +324,24 @@ namespace ZifikaLib
             }
         }
         /// <summary>
-        /// Overload for byte[] ciphertext convenience for symmetric decrypt.
-        /// Wraps the byte array in a BufferStream and forwards to the symmetric decrypt path.
+        /// Symmetric encrypt using only the full key.<br/>
+        /// Wire layout: enc(startLocation1Bit) | enc(intCatLen) | enc(intCat) | key-row offset stream | enc(integritySeal).<br/>
+        /// Integrity seal is computed over enc(startLocation1Bit)||key-row offset stream||intCat and is always emitted by this API.<br/>
         /// </summary>
-        public static ZifikaBufferStream Decrypt(byte[] ciphertext, ZifikaKey key, bool requireIntegrity = true)
+        public static ZifikaBufferStream Encrypt(byte[] data, ZifikaKey key)
         {
-            return Decrypt(new ZifikaBufferStream(ciphertext), key, requireIntegrity);
+            return EncryptCore(data, key, useIntegrity: true);
         }
         /// <summary>
-        /// Symmetric encrypt using only the full key.<br/>
-        /// Wire layout: enc(startLocation1Bit) | enc(intCatLen) | enc(intCat) | key-row offset stream | [enc(integritySeal, optional when useIntegrity=true)].<br/>
-        /// Integrity seal is computed over enc(startLocation1Bit)||key-row offset stream||intCat; when useIntegrity is false the seal is omitted entirely.<br/>
+        /// Symmetric encrypt without appending an integrity seal.<br/>
+        /// Dangerous research/debug API: disables tamper detection.
         /// </summary>
-        public static ZifikaBufferStream Encrypt(byte[] data, ZifikaKey key, bool useIntegrity = true)
+        public static ZifikaBufferStream EncryptWithoutSeal(byte[] data, ZifikaKey key, NoSealConsent consent)
+        {
+            EnsureNoSealAuthorized(consent);
+            return EncryptCore(data, key, useIntegrity: false);
+        }
+        private static ZifikaBufferStream EncryptCore(byte[] data, ZifikaKey key, bool useIntegrity)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (key == null) throw new ArgumentNullException(nameof(key));
@@ -365,7 +421,7 @@ namespace ZifikaLib
         /// <param name="vKeyTarget">Verifier key that will decrypt control-stream headers; null is allowed for full-key-only consumers.</param>
         /// <param name="authorityPrivateKeyPkcs8">Authority private key in PKCS#8 format used to sign checkpoints.</param>
         /// <param name="maxCheckpoints">Upper bound to defend against oversized metadata for large payloads.</param>
-        internal static ZifikaBufferStream Mint(byte[] data, ZifikaKey key, ZifikaVerifyingDecryptionKey vKeyTarget, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
+        internal static ZifikaBufferStream Mint(byte[] data, ZifikaKey key, ZifikaVerifyingDecryptionKey vKeyTarget, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints, bool useIntegrity)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (authorityPrivateKeyPkcs8.IsEmpty) throw new ArgumentException("authority private key is required", nameof(authorityPrivateKeyPkcs8));
@@ -550,20 +606,42 @@ namespace ZifikaLib
         }
         /// <summary>
         /// Mint (sign + produce ciphertext) using a full key and optional verifier-targeted header.
+        /// This API always appends and binds an integrity seal.
         /// </summary>
-        public static ZifikaBufferStream Mint(ReadOnlySpan<byte> data, ZifikaKey key, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
+        public static ZifikaBufferStream Mint(ReadOnlySpan<byte> data, ZifikaKey key, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, int maxCheckpoints = DefaultAuthorityCheckpointMax)
         {
-            return Mint(data.ToArray(), key, null, authorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity);
+            return Mint(data.ToArray(), key, null, authorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity: true);
+        }
+        /// <summary>
+        /// Mint without appending an integrity seal.
+        /// Dangerous research/debug API: disables tamper detection.
+        /// </summary>
+        public static ZifikaBufferStream MintWithoutSeal(ReadOnlySpan<byte> data, ZifikaKey key, ReadOnlySpan<byte> authorityPrivateKeyPkcs8, NoSealConsent consent, int maxCheckpoints = DefaultAuthorityCheckpointMax)
+        {
+            EnsureNoSealAuthorized(consent);
+            return Mint(data.ToArray(), key, null, authorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity: false);
         }
         /// <summary>
         /// Mint using a minting key composite.
         /// Uses the minting key's full key for payload encryption, derives a verifier key for the header, and signs checkpoints with its authority private key.
+        /// This API always appends and binds an integrity seal.
         /// </summary>
-        public static ZifikaBufferStream Mint(ReadOnlySpan<byte> data, ZifikaMintingKey mintingKey, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool useIntegrity = true)
+        public static ZifikaBufferStream Mint(ReadOnlySpan<byte> data, ZifikaMintingKey mintingKey, int maxCheckpoints = DefaultAuthorityCheckpointMax)
         {
             if (mintingKey == null) throw new ArgumentNullException(nameof(mintingKey));
             var verifier = mintingKey.CreateVerifierKey();
-            return Mint(data.ToArray(), mintingKey.FullKey, verifier.Key, mintingKey.AuthorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity);
+            return Mint(data.ToArray(), mintingKey.FullKey, verifier.Key, mintingKey.AuthorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity: true);
+        }
+        /// <summary>
+        /// Mint with a minting key composite without appending an integrity seal.
+        /// Dangerous research/debug API: disables tamper detection.
+        /// </summary>
+        public static ZifikaBufferStream MintWithoutSeal(ReadOnlySpan<byte> data, ZifikaMintingKey mintingKey, NoSealConsent consent, int maxCheckpoints = DefaultAuthorityCheckpointMax)
+        {
+            if (mintingKey == null) throw new ArgumentNullException(nameof(mintingKey));
+            EnsureNoSealAuthorized(consent);
+            var verifier = mintingKey.CreateVerifierKey();
+            return Mint(data.ToArray(), mintingKey.FullKey, verifier.Key, mintingKey.AuthorityPrivateKeyPkcs8, maxCheckpoints, useIntegrity: false);
         }
         /// <summary>
         /// Read a 1-bit encoded start location from a full-key mapped header stream.<br/>
@@ -651,7 +729,7 @@ namespace ZifikaLib
         /// Integrity seal is computed over key-row offset stream||intCat; when requireIntegrity is true the seal must be present and valid; when false, no seal is expected. Missing/invalid integrity fails decryption (no fallback).<br/>
         /// Checkpoints/signatures are always required for provenance.<br/>
         /// </summary>
-        internal static ZifikaBufferStream VerifyAndDecrypt(ZifikaBufferStream ciphertext, ZifikaVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> authorityPublicKeySpki, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool requireIntegrity = true)
+        internal static ZifikaBufferStream VerifyAndDecrypt(ZifikaBufferStream ciphertext, ZifikaVerifyingDecryptionKey verifyingKey, ReadOnlySpan<byte> authorityPublicKeySpki, int maxCheckpoints, bool requireIntegrity)
         {
             if (ciphertext == null) throw new ArgumentNullException(nameof(ciphertext));
             if (verifyingKey == null) throw new ArgumentNullException(nameof(verifyingKey));
@@ -849,10 +927,20 @@ namespace ZifikaLib
         /// Convenience overload that uses a verifier composite for verify+decrypt.
         /// Returns null on any failure and never emits plaintext without successful verification.
         /// </summary>
-        public static ZifikaBufferStream VerifyAndDecrypt(ZifikaBufferStream ciphertext, ZifikaVerifierKey verifierKey, int maxCheckpoints = DefaultAuthorityCheckpointMax, bool requireIntegrity = true)
+        public static ZifikaBufferStream VerifyAndDecrypt(ZifikaBufferStream ciphertext, ZifikaVerifierKey verifierKey, int maxCheckpoints = DefaultAuthorityCheckpointMax)
         {
             if (verifierKey == null) throw new ArgumentNullException(nameof(verifierKey));
-            return VerifyAndDecrypt(ciphertext, verifierKey.Key, verifierKey.AuthorityPublicKeySpki, maxCheckpoints, requireIntegrity);
+            return VerifyAndDecrypt(ciphertext, verifierKey.Key, verifierKey.AuthorityPublicKeySpki, maxCheckpoints, requireIntegrity: true);
+        }
+        /// <summary>
+        /// Convenience overload for verify+decrypt without integrity seal checks.
+        /// Dangerous research/debug API: disables tamper detection.
+        /// </summary>
+        public static ZifikaBufferStream VerifyAndDecryptWithoutSeal(ZifikaBufferStream ciphertext, ZifikaVerifierKey verifierKey, NoSealConsent consent, int maxCheckpoints = DefaultAuthorityCheckpointMax)
+        {
+            if (verifierKey == null) throw new ArgumentNullException(nameof(verifierKey));
+            EnsureNoSealAuthorized(consent);
+            return VerifyAndDecrypt(ciphertext, verifierKey.Key, verifierKey.AuthorityPublicKeySpki, maxCheckpoints, requireIntegrity: false);
         }
 
 
@@ -865,6 +953,7 @@ namespace ZifikaLib
         // Lightweight toggle for temporary mint/verify tracing; set false to silence.
         //======  FIELDS  ======
         public static bool DebugMintVerify { get; set; } = true;
+        public const string AllowUnsealedEnvVar = "ZIFIKA_ALLOW_UNSEALED";
         internal const int VerifyingKeyLockSize = 16;
         // Default cap on embedded checkpoint signatures (mint/verify mode)
         internal const int DefaultAuthorityCheckpointMax = 64;

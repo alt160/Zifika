@@ -10,6 +10,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		.gitignore = .gitignore
 		AGENTS.md = AGENTS.md
 		CONTRIBUTING.md = CONTRIBUTING.md
+		DESIGN.md = DESIGN.md
 		LICENSE.md = LICENSE.md
 		README.md = README.md
 		TRADEMARKS.md = TRADEMARKS.md
