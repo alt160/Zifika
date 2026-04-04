@@ -1,6 +1,6 @@
 # Zifika
 
-##NOTE##:  Discusussions section has now been enabled as of April 4, 2026
+**NOTE**:  Discusussions section has now been enabled as of April 4, 2026
 
 Zifika is an experimental cryptographic, deterministic, keyed **path‑walking** cipher.
 
