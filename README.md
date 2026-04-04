@@ -1,5 +1,7 @@
 # Zifika
 
+##NOTE##:  Discusussions section has now been enabled as of April 4, 2026
+
 Zifika is an experimental cryptographic, deterministic, keyed **path‑walking** cipher.
 
 It walks a keyed 2D permutation grid, using a Blake3‑driven jump stream to move the cursor, and emits a **row‑encoded action stream** as ciphertext. Decryption replays the same walk to recover plaintext.
