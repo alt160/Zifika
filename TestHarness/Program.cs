@@ -1671,14 +1671,14 @@ byte[] MutateSpliceHalf(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
 
 /// <summary>
 /// Attempt symmetric decrypt on tampered ciphertext and classify outcome as blocked/garbled or unexpected accept.<br/>
-/// "Blocked/garbled" means null result, exception, or plaintext mismatch against original.<br/>
+/// Sealed checks pass only on null. Research-mode checks also count exceptions and plaintext mismatches.<br/><br/>
 /// </summary>
 /// <param name="tampered">Tampered ciphertext bytes.<br/></param>
 /// <param name="originalPlain">Original plaintext bytes for match check.<br/></param>
 /// <param name="key">Symmetric key used for decryption.<br/></param>
 /// <param name="requireIntegrity">Integrity requirement flag passed to decrypt.<br/></param>
 /// <param name="outcome">Human-readable outcome detail for logging.<br/></param>
-/// <returns>True when attack was blocked or produced garbled output; false on unexpected perfect recovery.<br/></returns>
+/// <returns>True when the outcome satisfies the selected integrity mode.<br/></returns>
 bool IsSymmetricBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPlain, ZifikaKey key, bool requireIntegrity, out string outcome)
 {
     try
@@ -1689,6 +1689,11 @@ bool IsSymmetricBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPla
             outcome = "blocked(null)";
             return true;
         }
+        if (requireIntegrity)
+        {
+            outcome = $"unexpected-plaintext(len:{dec.Length})";
+            return false;
+        }
         var recovered = dec.ToArray();
         bool match = originalPlain.SequenceEqual(recovered);
         outcome = match ? $"unexpected-match(len:{recovered.Length})" : $"garbled(len:{recovered.Length})";
@@ -1696,21 +1701,21 @@ bool IsSymmetricBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPla
     }
     catch (Exception ex)
     {
-        outcome = $"blocked(exception:{ex.GetType().Name})";
-        return true;
+        outcome = $"exception({ex.GetType().Name})";
+        return !requireIntegrity;
     }
 }
 
 /// <summary>
 /// Attempt verify/decrypt on tampered ciphertext and classify outcome as blocked/garbled or unexpected accept.<br/>
-/// "Blocked/garbled" means null result, exception, or plaintext mismatch against original.<br/>
+/// Sealed checks pass only on null. Research-mode checks also count exceptions and plaintext mismatches.<br/><br/>
 /// </summary>
 /// <param name="tampered">Tampered ciphertext bytes.<br/></param>
 /// <param name="originalPlain">Original plaintext bytes for match check.<br/></param>
 /// <param name="verifier">Verifier key used for verify/decrypt.<br/></param>
 /// <param name="requireIntegrity">Integrity requirement flag passed to verify/decrypt.<br/></param>
 /// <param name="outcome">Human-readable outcome detail for logging.<br/></param>
-/// <returns>True when attack was blocked or produced garbled output; false on unexpected perfect recovery.<br/></returns>
+/// <returns>True when the outcome satisfies the selected integrity mode.<br/></returns>
 bool IsMintVerifyBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPlain, ZifikaVerifierKey verifier, bool requireIntegrity, out string outcome)
 {
     try
@@ -1721,6 +1726,11 @@ bool IsMintVerifyBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPl
             outcome = "blocked(null)";
             return true;
         }
+        if (requireIntegrity)
+        {
+            outcome = $"unexpected-plaintext(len:{dec.Length})";
+            return false;
+        }
         var recovered = dec.ToArray();
         bool match = originalPlain.SequenceEqual(recovered);
         outcome = match ? $"unexpected-match(len:{recovered.Length})" : $"garbled(len:{recovered.Length})";
@@ -1728,8 +1738,8 @@ bool IsMintVerifyBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPl
     }
     catch (Exception ex)
     {
-        outcome = $"blocked(exception:{ex.GetType().Name})";
-        return true;
+        outcome = $"exception({ex.GetType().Name})";
+        return !requireIntegrity;
     }
 }
 
@@ -1747,7 +1757,7 @@ bool IsMintVerifyBlockedOrGarbled(byte[] tampered, ReadOnlySpan<byte> originalPl
 void PrintAttackLine(string mode, string payloadLabel, string attackName, bool blockedOrGarbled, string outcome, bool detail, ReadOnlySpan<byte> tampered)
 {
     WriteLineColor(ConsoleColor.Red,
-        $"[{mode}-attack][{payloadLabel}] {attackName}: blocked-or-garbled={blockedOrGarbled} ({outcome})");
+        $"[{mode}-attack][{payloadLabel}] {attackName}: passed={blockedOrGarbled} ({outcome})");
     if (detail)
         WriteLineColor(ConsoleColor.Red, $"[{mode}-attack][{payloadLabel}] tampered: {HexWithLen(tampered, 32)}");
 }
@@ -3052,10 +3062,10 @@ void RunSymmetricAttackPreset(bool requireIntegrity, bool detail)
         }
 
         if (!detail)
-            WriteLineColor(ConsoleColor.Red, $"[sym-attack][{current.Label}] fuzz-summary: blocked-or-garbled={fuzzBlocked}/{fuzzCount}");
+            WriteLineColor(ConsoleColor.Red, $"[sym-attack][{current.Label}] fuzz-summary: passed={fuzzBlocked}/{fuzzCount}");
     }
 
-    WriteLineColor(ConsoleColor.Red, $"[sym-attack] overall blocked-or-garbled={blockedOrGarbledCases}/{totalCases}");
+    WriteLineColor(ConsoleColor.Red, $"[sym-attack] overall passed={blockedOrGarbledCases}/{totalCases}");
     Console.WriteLine();
 }
 
@@ -3456,10 +3466,10 @@ void RunMintVerifyAttackPreset(bool requireIntegrity, bool detail)
         }
 
         if (!detail)
-            WriteLineColor(ConsoleColor.Red, $"[m/v-attack][{current.Label}] fuzz-summary: blocked-or-garbled={fuzzBlocked}/{fuzzCount}");
+            WriteLineColor(ConsoleColor.Red, $"[m/v-attack][{current.Label}] fuzz-summary: passed={fuzzBlocked}/{fuzzCount}");
     }
 
-    WriteLineColor(ConsoleColor.Red, $"[m/v-attack] overall blocked-or-garbled={blockedOrGarbledCases}/{totalCases}");
+    WriteLineColor(ConsoleColor.Red, $"[m/v-attack] overall passed={blockedOrGarbledCases}/{totalCases}");
     Console.WriteLine();
 }
 
@@ -3720,7 +3730,171 @@ void RunZifikaPrimer()
     }
 }
 
-RunZifikaPrimer();
+if (args.SequenceEqual(new[] { "--sanity" }))
+{
+    RunReleaseSanityChecks();
+}
+else
+{
+    RunZifikaPrimer();
+}
+
+/// <summary>
+/// Exercises public Mint/Verify at checkpoint boundaries, reloads a known regression key and checks sealed scoring.<br/>
+/// A failed assertion terminates the noninteractive process with an error for release automation.<br/>
+/// </summary>
+void RunReleaseSanityChecks()
+{
+    var pair = Zifika.CreateMintingKeyPair();
+    // Substitute a deterministic grid into the documented minting-key serialization, retaining its generated authority.
+    byte[] seed = new byte[16];
+    BinaryPrimitives.WriteInt32LittleEndian(seed, 3851);
+    using var full = Zifika.CreateKey(seed, 8);
+    byte[] grid = full.ToBytes()[5..];
+    CheckFinalAuthorityTranscript(full, grid);
+    byte[] mintBlob = pair.minting.ToBytes();
+    grid.CopyTo(mintBlob, 6);
+    var mint = Zifika.CreateMintingKey(mintBlob);
+    var verifier = mint.CreateVerifierKey();
+    byte[] verifierBlob = verifier.ToBytes();
+    var reloaded = Zifika.CreateVerifierKey(verifierBlob);
+    int gridOffset = 5 + 7 + verifierBlob[5 + 6];
+    if (!grid.AsSpan().SequenceEqual(verifierBlob.AsSpan(gridOffset, grid.Length)) ||
+        !verifierBlob.AsSpan().SequenceEqual(reloaded.ToBytes()))
+        throw new InvalidOperationException("Verifier grid export or reload mismatch.");
+
+    var previousConsent = Environment.GetEnvironmentVariable(Zifika.AllowUnsealedEnvVar);
+    bool previousTrace = Zifika.DebugMintVerify;
+    try
+    {
+        Environment.SetEnvironmentVariable(Zifika.AllowUnsealedEnvVar, "1");
+        Zifika.DebugMintVerify = false;
+        foreach (bool sealedMode in new[] { true, false })
+        {
+            try
+            {
+                using var empty = MintWithIntegrityMode(Array.Empty<byte>(), mint, sealedMode);
+                throw new InvalidOperationException("Empty mint accepted.");
+            }
+            catch (ArgumentException ex) when (ex.ParamName == "data") { }
+
+            foreach (int length in new[] { 1, 63, 64, 65, 127, 128, 129, 4096, 4097 })
+            {
+                var data = Enumerable.Range(0, length).Select(i => (byte)i).ToArray();
+                using var envelope = MintWithIntegrityMode(data, mint, sealedMode);
+                foreach (var recipient in new[] { verifier, reloaded })
+                {
+                    envelope.Position = 0;
+                    using var recovered = VerifyAndDecryptWithIntegrityMode(envelope, recipient, sealedMode);
+                    if (recovered == null || !recovered.AsReadOnlySpan.SequenceEqual(data))
+                        throw new InvalidOperationException($"Round trip failed at length {length}, seal {sealedMode}.");
+                }
+                byte[] wire = envelope.ToArray();
+                foreach (var invalid in new[] { wire[..^1], wire.Concat(new byte[1]).ToArray(), Array.Empty<byte>() })
+                {
+                    using var input = new ZifikaBufferStream(invalid);
+                    using var recovered = VerifyAndDecryptWithIntegrityMode(input, reloaded, sealedMode);
+                    if (recovered != null) throw new InvalidOperationException("Invalid framing accepted.");
+                }
+                if (!sealedMode)
+                {
+                    wire[^1] ^= 1;
+                    using var input = new ZifikaBufferStream(wire);
+                    using var recovered = VerifyAndDecryptWithIntegrityMode(input, reloaded, false);
+                    if (recovered != null) throw new InvalidOperationException("Changed payload passed authority verification.");
+                }
+            }
+        }
+
+        byte[] sample = { 7, 11, 19 };
+        using var sym = Zifika.Encrypt(sample, full);
+        using var issued = Zifika.Mint(sample, mint);
+        byte[] altered = { 0 };
+        foreach (var expected in new[] { sample, altered, Array.Empty<byte>() })
+        {
+            if (IsSymmetricBlockedOrGarbled(sym.ToArray(), expected, full, true, out _) ||
+                IsMintVerifyBlockedOrGarbled(issued.ToArray(), expected, verifier, true, out _))
+                throw new InvalidOperationException("Sealed harness counted returned plaintext as blocked.");
+        }
+        if (IsSymmetricBlockedOrGarbled(sym.ToArray(), sample, null!, true, out _) ||
+            IsMintVerifyBlockedOrGarbled(issued.ToArray(), sample, null!, true, out _))
+            throw new InvalidOperationException("Sealed harness counted an exception as blocked.");
+        byte[] badSym = sym.ToArray();
+        badSym[^1] ^= 1;
+        byte[] badMint = issued.ToArray();
+        badMint[18] ^= 1; // First start-field nonce in either control encoding.
+        var console = Console.Out;
+        using var trace = new StringWriter();
+        try
+        {
+            Console.SetOut(trace);
+            Zifika.DebugMintVerify = true;
+            if (!IsSymmetricBlockedOrGarbled(badSym, sample, full, true, out string symOutcome) ||
+                !IsMintVerifyBlockedOrGarbled(badMint, sample, verifier, true, out string mintOutcome) ||
+                symOutcome != "blocked(null)" || mintOutcome != "blocked(null)")
+                throw new InvalidOperationException("Sealed harness failed to recognize null rejection.");
+        }
+        finally { Console.SetOut(console); }
+#if DEBUG
+        if (!trace.ToString().Contains("nonce mismatch")) throw new InvalidOperationException("Missing Debug nonce trace.");
+#else
+        if (trace.ToString().Length != 0) throw new InvalidOperationException("Release emitted rejection details.");
+#endif
+    }
+    finally
+    {
+        Zifika.DebugMintVerify = previousTrace;
+        Environment.SetEnvironmentVariable(Zifika.AllowUnsealedEnvVar, previousConsent);
+    }
+    Console.WriteLine("Zifika release sanity checks passed.");
+}
+
+/// <summary>
+/// Builds independently encoded checkpoint statements with a disposable test authority.<br/>
+/// Keeps the observer snapshots fixed while varying a single final field to test the signature contract in isolation.<br/>
+/// </summary>
+void CheckFinalAuthorityTranscript(ZifikaKey full, byte[] grid)
+{
+    using var authority = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+    byte[] data = Enumerable.Range(0, 65).Select(i => (byte)i).ToArray();
+    byte[] catalyst = { 9, 2, 3, 5, 7, 11, 13 };
+    const short start = 17;
+    const int interval = 33;
+    var states = new byte[64];
+    using var actions = full.MapDataWithObserver(data, start, catalyst, interval, 2, states);
+    byte[] keyId = Blake3.Hasher.Hash(grid).AsSpan().ToArray();
+    var digest = Blake3.Hasher.Hash(actions.ToArray().Concat(catalyst).ToArray()).AsSpan().ToArray();
+    byte[] domain = Encoding.ASCII.GetBytes("Zifika_AUTH_CKPT_V2");
+    using var prefix = new MemoryStream();
+    using var writer = new BinaryWriter(prefix);
+    writer.Write(domain);
+    writer.Write(keyId);
+    writer.Write(0);
+    writer.Write(states, 0, 32);
+    var signingHash = System.Security.Cryptography.HashAlgorithmName.SHA256;
+    var format = System.Security.Cryptography.DSASignatureFormat.IeeeP1363FixedFieldConcatenation;
+    byte[] firstProof = authority.SignData(prefix.ToArray(), signingHash, format);
+    prefix.Position = domain.Length + keyId.Length;
+    writer.Write(1);
+    writer.Write(states, 32, 32);
+    int finalOffset = checked((int)prefix.Position);
+    writer.Write((byte)1);
+    writer.Write(data.Length);
+    writer.Write(start);
+    writer.Write(digest);
+    byte[] finalMessage = prefix.ToArray();
+    // null selects the canonical statement. Each offset selects one final field to change.
+    foreach (int? field in new int?[] { null, 0, 1, 5, 7 })
+    {
+        var statement = (byte[])finalMessage.Clone();
+        if (field.HasValue) statement[finalOffset + field.Value] ^= 1;
+        byte[] proofs = firstProof.Concat(authority.SignData(statement, signingHash, format)).ToArray();
+        actions.Position = 0;
+        using var plain = full.UnmapDataWithAuthority(actions, start, catalyst, interval, 2, proofs, authority, keyId);
+        if (field.HasValue ? plain != null : plain == null || !plain.AsReadOnlySpan.SequenceEqual(data))
+            throw new InvalidOperationException($"Final authority statement failed field check {field}.");
+    }
+}
 
 class GlossaryNode
 {

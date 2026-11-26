@@ -235,6 +235,8 @@ Required transition order:
 2. Derive `workingKeyState` from `baseKeyState` and diversification inputs using profile-defined `keyReshaping`, then initialize payload walk state.
 3. Walk and encrypt payload into `rowOffsetStream` while computing checkpoint observer state data.
 4. Produce authority proofs over checkpoint messages defined by the active profile.
+
+   The C# V2 profile signs ASCII `Zifika_AUTH_CKPT_V2`, the first 32 bytes of the base-key hash, the zero-based four-byte little-endian checkpoint index, and the 32-byte observer state, in order. The final checkpoint appends the byte `01`, the four-byte little-endian payload length, the two-byte little-endian start location, and BLAKE3-256 of `rowOffsetStream || intCat`. The seal hash absorbs successive ciphertext intervals, including any final tail, and then the catalyst. Each proof uses ECDSA P-256 with SHA-256 and a 64-byte P1363 signature. Earlier authority transcripts require re-minting.
 5. Encrypt and emit Mint/Verify control fields and payload stream in profile-defined order.
 6. If sealed, compute and append encrypted `integritySeal` over the profile-defined transcript.
 7. Emit final minted ciphertext.
@@ -333,7 +335,7 @@ At minimum, the following MUST pass for each claimed mode:
 
 - Deterministic replay test under fixed key material, fixed `startLocation`, and fixed `intCat`.
 - Round-trip test where valid encrypt/mint output is recovered exactly by matching decrypt/verify.
-- Multi-length test coverage, including empty payload and non-trivial payload lengths.
+- Multi-length coverage includes symmetric empty payloads and nonempty Mint/Verify payloads. Mint rejects empty input and verification returns null on empty payloads.
 
 ### 7.3 Required Negative Tests
 

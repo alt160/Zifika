@@ -9,7 +9,7 @@ It walks a keyed 2D permutation grid, using a Blake3‑driven jump stream to mov
 Zifika ships in two modes:
 
 - **Symmetric mode**: full‑key encrypt and decrypt.
-- **Mint and Verify mode**: an origin‑locked mode where a **minting key** produces ciphertext and a **verifier key** can decrypt and verify provenance, while the verifier key is intentionally unable to mint ciphertext that passes verification.
+- **Mint and Verify mode** pairs a minting key with a verifier key for offline decryption and origin verification. Its security goal is that a genuine verifier accepts only data issued by the mint, even when the party supplying the ciphertext holds a copy of the verifier key.
 
 ## Status
 
@@ -177,15 +177,15 @@ Verifier composite key.
 
 ### Verifier decryption key internals
 
-The verifier decryption key is derived from a full key but does not retain the permutation bytes.
-
-It stores:
+The verifier stores its base permutation in row order, both in memory and in its compact serialized form.
 
 - `keyHash` (64 bytes)
 - `nonces[flatIndex]` (ushort per index)
-- `map[h32] -> byte` where `h32 = Blake3(keyHash[0..8] || index || nonce) truncated to 32 bits`
+- `baseGrid[row * 256 + column]` holds the byte at each position.
 
-This supports decryption by lookup without exposing the full permutation.
+A verifier-key holder can use the reconstructed permutation to create encrypted data. The mint holds the authority private key, and the verifier uses the corresponding public key to check what the mint authorized.
+
+For example, a publisher can issue an encrypted license granting export through June 30. The application must be able to verify and read that license offline. If a holder of the verifier key encrypts new terms granting export through December 31, the genuine application must reject the extension because the publisher never issued it.
 
 
 
@@ -263,12 +263,14 @@ Notes:
 
 ## Authority checkpoints
 
-Mint and Verify binds provenance by signing a 32-byte **observer state** at one or more checkpoints.
+Mint requires at least one payload byte. Each authority checkpoint signs the walk’s 32-byte observer state. The final checkpoint also signs the exact payload length, start location and BLAKE3 digest of the payload ciphertext followed by the catalyst. The minter updates the existing seal hash with each checkpoint interval and includes the final partial interval.
 
 - Checkpoints are planned from payload length at roughly 1 checkpoint per 64 steps.
 - Checkpoint count is capped by `maxCheckpoints`.
 
 Verification recomputes observer state while replaying the ciphertext walk and requires all signatures to verify before returning plaintext.
+
+V2 changes the authority statement. Re-mint earlier messages with the minting key before using this verifier.
 
 ## Determinism
 

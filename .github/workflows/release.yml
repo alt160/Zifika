@@ -1,0 +1,43 @@
+name: Publish Zifika
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.repository == 'alt160/Zifika'
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: 8.0.x
+      - name: Validate the tag and exercise both configurations
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content ZifikaLib/ZifikaLib.csproj -Raw
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $env:GITHUB_REF_NAME -cne "v$version") { throw 'Tag and project version must match.' }
+          foreach ($configuration in 'Debug','Release') {
+            dotnet build Zifika.sln -c $configuration
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            dotnet run --no-build --project TestHarness -c $configuration -- --sanity
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          dotnet pack ZifikaLib --no-build -c Release -o artifacts/packages
+      - uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        id: nuget
+        with:
+          user: iqueue
+      - name: Push the validated version
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          dotnet nuget push "artifacts/packages/Zifika.$version.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json
